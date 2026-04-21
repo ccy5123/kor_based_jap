@@ -223,7 +223,7 @@ std::wstring HangulComposer::input(wchar_t jamo) {
             }
         }
 
-        // Consonant — becomes jongseong candidate
+        // Consonant that can be jongseong → make it the jong of current syllable
         int ji = jongIndex(jamo);
         if (ji >= 0) {
             _jong    = ji;
@@ -231,16 +231,17 @@ std::wstring HangulComposer::input(wchar_t jamo) {
             return {};  // → CHO_JUNG_JONG
         }
 
-        // Vowel that doesn't form compound → emit current syllable, start new
+        // Anything else (vowel-not-compound, or fortis consonant ㄸ/ㅃ/ㅉ that
+        // cannot be a jongseong) → emit current syllable and recurse so the new
+        // input is processed against an EMPTY state (will become a new cho or
+        // a stand-alone vowel correctly).
+        // Bug fixed: previously this branch hard-coded `_cho = 11` (ㅇ) and then
+        // tried to use `jamo` as a vowel, which produced "たㅇ" when the second
+        // ㄸ in 따따 arrived.
         wchar_t syllable = compose();
         std::wstring out(1, syllable);
         reset();
-        // New syllable starts with silent ㅇ + vowel
-        _cho     = 11;
-        int vi   = jungIndex(jamo);
-        _jung    = vi;
-        _rawJung = jamo;
-        return out;
+        return out + input(jamo);
     }
 
     // ----- State: CHO_JUNG_JONG ------------------------------------------
@@ -402,6 +403,15 @@ STDMETHODIMP KeyHandler::OnTestKeyDown(ITfContext *pCtx, WPARAM wParam,
     DBGF("OnTestKeyDown vk=%lu", (unsigned long)wParam);
     UINT vk = static_cast<UINT>(wParam);
 
+    // Pure modifiers — never eat (see OnKeyDown for rationale).
+    if (vk == VK_SHIFT   || vk == VK_LSHIFT   || vk == VK_RSHIFT
+     || vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL
+     || vk == VK_MENU    || vk == VK_LMENU    || vk == VK_RMENU
+     || vk == VK_LWIN    || vk == VK_RWIN     || vk == VK_CAPITAL) {
+        *pfEaten = FALSE;
+        return S_OK;
+    }
+
     // VK_CONVERT / VK_NONCONVERT are always eaten (IME On/Off control)
     if (vk == VK_CONVERT || vk == VK_NONCONVERT) {
         *pfEaten = TRUE;
@@ -414,19 +424,35 @@ STDMETHODIMP KeyHandler::OnTestKeyDown(ITfContext *pCtx, WPARAM wParam,
         return S_OK;
     }
 
+    // Modifier-key combinations (Ctrl+X, Alt+X, Win+X) belong to the host
+    // application as shortcuts — never eat them.  Plain Shift is allowed
+    // because it's part of normal Korean jamo input (e.g. Shift+Q → ㅃ).
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool alt  = (GetKeyState(VK_MENU)    & 0x8000) != 0;
+    bool win  = (GetKeyState(VK_LWIN)    & 0x8000) != 0
+             || (GetKeyState(VK_RWIN)    & 0x8000) != 0;
+    if (ctrl || alt || win) { *pfEaten = FALSE; return S_OK; }
+
     bool shifted = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
 
     // Korean jamo keys
     if (VkToJamo(vk, shifted) != 0) { *pfEaten = TRUE; return S_OK; }
 
-    // Backspace when composing
-    if (vk == VK_BACK && !_composer.empty()) { *pfEaten = TRUE; return S_OK; }
+    // Backspace / Esc when something is composing or pending
+    bool composing = !_composer.empty() || !_pIme->PendingKana().empty();
+    if (vk == VK_BACK   && composing) { *pfEaten = TRUE; return S_OK; }
+    if (vk == VK_ESCAPE && composing) { *pfEaten = TRUE; return S_OK; }
 
-    // Hyphen → 장음 ー
-    if (vk == VK_OEM_MINUS) { *pfEaten = TRUE; return S_OK; }
+    // Space commits accumulated preedit (eats the space)
+    if (vk == VK_SPACE  && composing) { *pfEaten = TRUE; return S_OK; }
+
+    // Hyphen → 장음 ー, comma → 、, period → 。
+    if (vk == VK_OEM_MINUS  || vk == VK_OEM_COMMA || vk == VK_OEM_PERIOD) {
+        *pfEaten = TRUE; return S_OK;
+    }
 
     // F6 (→ hiragana) / F7 (→ katakana): eat only when composing
-    if ((vk == VK_F6 || vk == VK_F7) && !_composer.empty()) {
+    if ((vk == VK_F6 || vk == VK_F7) && composing) {
         *pfEaten = TRUE;
         return S_OK;
     }
@@ -440,20 +466,74 @@ STDMETHODIMP KeyHandler::OnTestKeyUp(ITfContext*, WPARAM, LPARAM, BOOL *pfEaten)
     return S_OK;
 }
 
+// ----------------------------------------------------------------------------
+// Helpers for the new accumulation-style preedit
+// ----------------------------------------------------------------------------
+
+// Append the kana form of a fully-composed Korean syllable (ch) to the IME's
+// pending kana buffer.  nextJamo is the lookahead consonant for batchim rules
+// (sokuon_strict / sokuon_universal); pass 0 for terminal flush.
+static void AppendKanaFor(KorJpnIme *pIme, wchar_t ch, wchar_t nextJamo) {
+    std::wstring kana = batchim::lookup(ch, nextJamo);
+    if (!kana.empty()) pIme->AppendKana(kana);
+}
+
+// Build the visible preedit string: pending_kana + (current_in-progress syllable
+// rendered as kana when possible, otherwise raw Korean jamo).
+static std::wstring BuildPreedit(KorJpnIme *pIme, HangulComposer& composer) {
+    std::wstring pre = pIme->PendingKana();
+    std::wstring cur = composer.preedit();
+    if (!cur.empty()) {
+        if (batchim::isHangul(cur[0])) {
+            std::wstring kana = batchim::lookup(cur[0], 0);
+            pre += kana.empty() ? cur : kana;
+        } else {
+            pre += cur;     // bare consonant or vowel jamo
+        }
+    }
+    return pre;
+}
+
+// Flush in-progress syllable into pending, then commit pending to the document.
+// Returns true if anything was committed.
+static bool FlushAndCommit(KorJpnIme *pIme, HangulComposer& composer, ITfContext *pCtx) {
+    std::wstring tail = composer.flush();
+    if (!tail.empty()) AppendKanaFor(pIme, tail[0], 0);
+
+    const std::wstring& pending = pIme->PendingKana();
+    if (pending.empty()) return false;
+
+    pIme->CommitText(pCtx, pending);
+    pIme->ClearPending();
+    pIme->UpdatePreedit(pCtx, L"");
+    return true;
+}
+
 // @MX:ANCHOR: OnKeyDown is the main dispatch for all Korean key processing
 // @MX:REASON: Everything — composition, preedit update, kana lookup — flows through here
 STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
                                     LPARAM lParam, BOOL *pfEaten) {
     DBGF("OnKeyDown vk=%lu", (unsigned long)wParam);
     UINT vk = static_cast<UINT>(wParam);
+
+    // Pure modifier-key events (Shift, Ctrl, Alt, Win, CapsLock) are sent on
+    // their own when the user presses/releases the modifier.  We must NOT
+    // treat them as "non-Korean keys" and flush — that would commit the
+    // pending preedit the moment the user presses Shift to type a shifted
+    // jamo (e.g. Shift+W = ㅉ for 찌).  Just ignore and pass through.
+    if (vk == VK_SHIFT   || vk == VK_LSHIFT   || vk == VK_RSHIFT
+     || vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL
+     || vk == VK_MENU    || vk == VK_LMENU    || vk == VK_RMENU
+     || vk == VK_LWIN    || vk == VK_RWIN     || vk == VK_CAPITAL) {
+        *pfEaten = FALSE;
+        return S_OK;
+    }
+
     bool shifted = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
 
     // ---- IME On/Off --------------------------------------------------------
     if (vk == VK_NONCONVERT) {
-        // Flush any pending composition, then deactivate
-        std::wstring tail = _composer.flush();
-        if (!tail.empty()) _pIme->CommitText(pCtx, batchim::lookup(tail[0], 0));
-        _pIme->UpdatePreedit(pCtx, L"");
+        FlushAndCommit(_pIme, _composer, pCtx);
         _pIme->SetActive(false);
         *pfEaten = TRUE;
         return S_OK;
@@ -470,43 +550,34 @@ STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
         return S_OK;
     }
 
+    // Modifier-key combinations are app shortcuts — pass them through.
+    // (Plain Shift is fine; it's used for shifted Korean jamo like ㅃ.)
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool alt  = (GetKeyState(VK_MENU)    & 0x8000) != 0;
+    bool win  = (GetKeyState(VK_LWIN)    & 0x8000) != 0
+             || (GetKeyState(VK_RWIN)    & 0x8000) != 0;
+    if (ctrl || alt || win) {
+        // Flush so any in-progress preedit is committed before the shortcut runs.
+        FlushAndCommit(_pIme, _composer, pCtx);
+        *pfEaten = FALSE;
+        return S_OK;
+    }
+
     // ---- F6 / F7: character-type conversion --------------------------------
-    // F6 → commit current preedit as hiragana (our default; same as Enter)
+    // F6 → commit current preedit as hiragana
     if (vk == VK_F6) {
-        std::wstring tail = _composer.flush();
-        if (!tail.empty()) {
-            _pIme->CommitText(pCtx, batchim::lookup(tail[0], 0));
-            _pIme->UpdatePreedit(pCtx, L"");
-        }
-        *pfEaten = !tail.empty(); // eat only when there was something to commit
+        bool committed = FlushAndCommit(_pIme, _composer, pCtx);
+        *pfEaten = committed;
         return S_OK;
     }
     // F7 → commit as full-width katakana
     if (vk == VK_F7) {
         std::wstring tail = _composer.flush();
-        if (!tail.empty()) {
-            _pIme->CommitText(pCtx, toKatakanaStr(batchim::lookup(tail[0], 0)));
-            _pIme->UpdatePreedit(pCtx, L"");
-        }
-        *pfEaten = !tail.empty();
-        return S_OK;
-    }
-
-    // ---- Flush composer on navigation/commit keys
-    if (vk == VK_RETURN || vk == VK_TAB || vk == VK_SPACE) {
-        std::wstring tail = _composer.flush();
-        if (!tail.empty()) {
-            // terminal flush → nextJamo = 0
-            _pIme->CommitText(pCtx, batchim::lookup(tail[0], 0));
-        }
-        *pfEaten = FALSE; // let the app also see Enter/Tab/Space
-        return S_OK;
-    }
-
-    // Backspace — undo last jamo (simplification: flush and re-emit sans last char)
-    if (vk == VK_BACK) {
-        if (!_composer.empty()) {
-            _composer.reset();
+        if (!tail.empty()) AppendKanaFor(_pIme, tail[0], 0);
+        const std::wstring& pending = _pIme->PendingKana();
+        if (!pending.empty()) {
+            _pIme->CommitText(pCtx, toKatakanaStr(pending));
+            _pIme->ClearPending();
             _pIme->UpdatePreedit(pCtx, L"");
             *pfEaten = TRUE;
         } else {
@@ -515,27 +586,85 @@ STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
         return S_OK;
     }
 
-    // Hyphen → long vowel mark ー
-    // The ー follows a syllable, so the batchim before it is terminal.
+    // ---- Space / Enter / Tab: commit accumulated preedit ------------------
+    // Standard JP-IME behaviour: when there's nothing to commit, pass the key
+    // through (regular space, newline, tab); when there IS preedit, commit it
+    // and EAT the space (Space is a commit signal, not whitespace), but pass
+    // Enter/Tab through after committing (typical JP-IME convention).
+    if (vk == VK_SPACE || vk == VK_RETURN || vk == VK_TAB) {
+        bool hadComposing =
+            !_composer.empty() || !_pIme->PendingKana().empty();
+        FlushAndCommit(_pIme, _composer, pCtx);
+        if (vk == VK_SPACE && hadComposing) {
+            *pfEaten = TRUE;        // Space ate as commit trigger
+        } else {
+            *pfEaten = FALSE;       // Enter/Tab/Space-no-preedit pass through
+        }
+        return S_OK;
+    }
+
+    // Escape — discard preedit (no commit)
+    if (vk == VK_ESCAPE) {
+        if (!_composer.empty() || !_pIme->PendingKana().empty()) {
+            _composer.reset();
+            _pIme->ClearPending();
+            _pIme->UpdatePreedit(pCtx, L"");
+            *pfEaten = TRUE;
+        } else {
+            *pfEaten = FALSE;
+        }
+        return S_OK;
+    }
+
+    // Backspace — first try to peel a jamo off the in-progress syllable; if
+    // the composer is already empty, peel the last codepoint off pending kana.
+    if (vk == VK_BACK) {
+        if (!_composer.empty()) {
+            _composer.reset();          // (TODO: per-jamo undo; reset clears whole syllable)
+            _pIme->UpdatePreedit(pCtx, BuildPreedit(_pIme, _composer));
+            *pfEaten = TRUE;
+            return S_OK;
+        }
+        const std::wstring& pending = _pIme->PendingKana();
+        if (!pending.empty()) {
+            std::wstring trimmed = pending.substr(0, pending.size() - 1);
+            _pIme->ClearPending();
+            _pIme->AppendKana(trimmed);
+            _pIme->UpdatePreedit(pCtx, BuildPreedit(_pIme, _composer));
+            *pfEaten = TRUE;
+            return S_OK;
+        }
+        *pfEaten = FALSE;
+        return S_OK;
+    }
+
+    // Hyphen → long-vowel mark ー (appended to pending)
     if (vk == VK_OEM_MINUS) {
         std::wstring tail = _composer.flush();
-        if (!tail.empty()) {
-            _pIme->CommitText(pCtx, batchim::lookup(tail[0], 0) + L"\u30FC");
-        } else {
-            _pIme->CommitText(pCtx, L"\u30FC");
-        }
+        if (!tail.empty()) AppendKanaFor(_pIme, tail[0], 0);
+        _pIme->AppendKana(L"\u30FC");
+        _pIme->UpdatePreedit(pCtx, BuildPreedit(_pIme, _composer));
         *pfEaten = TRUE;
         return S_OK;
     }
 
-    // Korean jamo
+    // Japanese punctuation — , → 、  and  . → 。
+    // Behave like a normal jamo input: flush in-progress syllable, append the
+    // punctuation to the pending kana so the user can keep building a phrase.
+    if (vk == VK_OEM_COMMA || vk == VK_OEM_PERIOD) {
+        std::wstring tail = _composer.flush();
+        if (!tail.empty()) AppendKanaFor(_pIme, tail[0], 0);
+        _pIme->AppendKana(vk == VK_OEM_COMMA ? L"\u3001" : L"\u3002");
+        _pIme->UpdatePreedit(pCtx, BuildPreedit(_pIme, _composer));
+        *pfEaten = TRUE;
+        return S_OK;
+    }
+
+    // ---- Korean jamo input ------------------------------------------------
     wchar_t jamo = VkToJamo(vk, shifted);
     if (jamo == 0) {
-        // Non-Korean key — flush and pass through (terminal context)
-        std::wstring tail = _composer.flush();
-        if (!tail.empty()) {
-            _pIme->CommitText(pCtx, batchim::lookup(tail[0], 0));
-        }
+        // Non-Korean key (number, punctuation, etc.) — flush and let app handle key
+        FlushAndCommit(_pIme, _composer, pCtx);
         *pfEaten = FALSE;
         return S_OK;
     }
@@ -546,13 +675,11 @@ STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
         // At most one syllable is completed per keystroke (see HangulComposer invariant).
         // The triggering jamo is the next initial consonant — pass as context for
         // sokuon_strict / sokuon_universal decisions.
-        _pIme->CommitText(pCtx, batchim::lookup(completed[0], jamo));
+        AppendKanaFor(_pIme, completed[0], jamo);
     }
 
-    // Update preedit (in-progress syllable)
-    std::wstring pre = _composer.preedit();
-    _pIme->UpdatePreedit(pCtx, pre);
-
+    // Update preedit = pending + current in-progress syllable
+    _pIme->UpdatePreedit(pCtx, BuildPreedit(_pIme, _composer));
     return S_OK;
 }
 

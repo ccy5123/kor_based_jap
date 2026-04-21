@@ -89,8 +89,9 @@ inline std::wstring suffix(int jongIdx, wchar_t nextJamo) {
 }
 
 // ---- CHO_ALIAS -------------------------------------------------------------
-// Fortis (된소리) consonants have no distinct Japanese phoneme; map them to
-// the nearest row so that syllables like 짜/까/따/빠/씨 resolve correctly.
+// Fortis (된소리) consonants have no distinct Japanese phoneme; map each one
+// to the matching SEION (청음) row so 까/따/빠/싸/짜 give the unvoiced
+// か/た/ぱ/さ/ちゃ — what Korean speakers naturally expect.
 //
 // Cho index table (mirrors HangulComposer::kCho):
 //   0=ㄱ 1=ㄲ 2=ㄴ 3=ㄷ 4=ㄸ 5=ㄹ 6=ㅁ 7=ㅂ 8=ㅃ
@@ -101,11 +102,11 @@ inline std::wstring suffix(int jongIdx, wchar_t nextJamo) {
 
 inline int choAlias(int cho) noexcept {
     switch (cho) {
-        case  1: return  0;  // ㄲ → ㄱ  (が row)
-        case  4: return  3;  // ㄸ → ㄷ  (だ row)
+        case  1: return 15;  // ㄲ → ㅋ  (か row, seion — was ㄱ/が row)
+        case  4: return 16;  // ㄸ → ㅌ  (た row, seion — was ㄷ/だ row)
         case  8: return 17;  // ㅃ → ㅍ  (ぱ row; consistent with 삐→ぴ)
         case 10: return  9;  // ㅆ → ㅅ  (さ row; 쓰→つ stays via direct hit)
-        case 13: return 14;  // ㅉ → ㅊ  (ちゃ row; Python CHO_ALIAS)
+        case 13: return 14;  // ㅉ → ㅊ  (ちゃ row)
         default: return cho;
     }
 }

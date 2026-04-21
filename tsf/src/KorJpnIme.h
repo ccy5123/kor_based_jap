@@ -1,5 +1,6 @@
 #pragma once
 #include "Globals.h"
+#include "Dictionary.h"
 #include <string>
 
 // Forward declarations
@@ -34,7 +35,21 @@ public:
     bool IsActive() const { return _active; }
     void SetActive(bool active) { _active = active; }
 
+    // Kana→kanji dictionary (loaded from jpn_dict.txt next to the DLL).
+    // Returns nullptr if the dictionary file was missing or failed to load.
+    const Dictionary* GetDictionary() const {
+        return _dict.IsLoaded() ? &_dict : nullptr;
+    }
+
+    // Kana accumulation buffer for standard JP-IME-style preedit.
+    // KeyHandler appends to this buffer when a syllable completes; Space
+    // triggers conversion (kanji candidate window); Enter commits raw kana.
+    const std::wstring& PendingKana() const { return _pendingKana; }
+    void                AppendKana(const std::wstring& kana) { _pendingKana += kana; }
+    void                ClearPending()                         { _pendingKana.clear(); }
+
 private:
+    void _LoadDictionary();   // called once from Activate()
     LONG          _cRef;
     TfClientId    _tid    = TF_CLIENTID_NULL;
     ITfThreadMgr *_pThreadMgr = nullptr;  // not AddRef'd — owned by TSF runtime
@@ -44,4 +59,8 @@ private:
     // IME on by default — when the user switches to our TIP via Win+Space they
     // expect Japanese output immediately (한자/VK_CONVERT toggles to/from passthrough).
     bool          _active       = true;
+
+    Dictionary    _dict;            // loaded once on first Activate()
+    bool          _dictTried = false;
+    std::wstring  _pendingKana;     // accumulated kana waiting for commit/conversion
 };

@@ -8,9 +8,11 @@
 우: う
 에: え
 오: お
+어: お     # ㅓ → お (same row as ㅗ)
 야: や
 유: ゆ
 요: よ
+여: よ     # ㅕ ≈ ㅛ for our purposes
 와: わ
 위: ウィ   # ウィンドウ, ウィキ 등 외래어
 웨: ウェ   # ウェブ 등
@@ -141,6 +143,52 @@
 랴: りゃ
 류: りゅ
 료: りょ
+
+# ㅡ vowel rounding — Korean ㅡ has no Japanese vowel equivalent, but users
+# commonly transliterate ㅡ as う (e.g. 크リス, 트럭).  Each consonant + ㅡ maps
+# to the corresponding う-row kana.
+으: う
+그: ぐ
+크: く
+느: ぬ
+트: と     # 트럭→トラック convention; foreign-loanword トゥ stays via 투
+르: る
+므: む
+브: ぶ
+프: ぷ
+흐: ふ
+# (스, 즈, 츠, 드 are listed in their respective rows above)
+
+# ㅕ syllables — Korean ㅕ has no Japanese vowel of its own, but in user
+# transliteration it functions like ㅛ (e.g. 시경 → しぎょん).  So each
+# consonant + ㅕ maps to the same kana as that consonant + ㅛ.
+켜: きょ
+겨: ぎょ
+셔: しょ
+져: じょ
+쳐: ちょ
+녀: にょ
+혀: ひょ
+벼: びょ
+펴: ぴょ
+며: みょ
+려: りょ
+
+# ㅓ syllables — ㅓ rounds to お, so each consonant + ㅓ maps to the same kana
+# as that consonant + ㅗ.
+거: ご
+커: こ
+서: そ
+저: ぞ
+처: ちょ
+너: の
+더: ど
+터: と
+허: ほ
+버: ぼ
+퍼: ぽ
+머: も
+러: ろ
 
 # 된소리 alternates (사용자 표기 관습 흡수)
 쓰: つ
