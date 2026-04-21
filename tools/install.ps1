@@ -57,7 +57,10 @@ Write-Host "    Install dir: $InstallDir"
 Write-Host ""
 
 # ---------- Sanity-check source files --------------------------------------
-$required = @('KorJpnIme.dll', 'jpn_dict.txt', 'install_tip.reg', 'uninstall_tip.reg')
+# LICENSES.txt is the third-party attribution file (Mozc / NAIST IPAdic /
+# Okinawa Dictionary).  IPAdic terms require it to ship alongside the data.
+$required = @('KorJpnIme.dll', 'jpn_dict.txt', 'LICENSES.txt',
+              'install_tip.reg', 'uninstall_tip.reg')
 foreach ($f in $required) {
     $path = Join-Path $SourceDir $f
     if (-not (Test-Path $path)) {

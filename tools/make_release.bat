@@ -10,6 +10,7 @@ REM Output structure:
 REM     <output_dir>\
 REM         KorJpnIme.dll
 REM         jpn_dict.txt
+REM         LICENSES.txt          (third-party attribution; required by IPAdic terms)
 REM         install_tip.reg
 REM         uninstall_tip.reg
 REM         install.ps1
@@ -67,6 +68,9 @@ if exist "%OUT_DIR%" rmdir /s /q "%OUT_DIR%"
 mkdir "%OUT_DIR%"
 copy /Y "%BUILD_DIR%\KorJpnIme.dll"            "%OUT_DIR%\" >nul
 copy /Y "%PROJECT_ROOT%\dict\jpn_dict.txt"     "%OUT_DIR%\" >nul
+REM LICENSES.txt: third-party attribution for Mozc / NAIST IPAdic / Okinawa
+REM Dictionary.  IPAdic terms require this to be redistributed with the data.
+copy /Y "%PROJECT_ROOT%\dict\LICENSES.txt"     "%OUT_DIR%\" >nul
 copy /Y "%SRC_ROOT%\install_tip.reg"           "%OUT_DIR%\" >nul
 copy /Y "%SRC_ROOT%\uninstall_tip.reg"         "%OUT_DIR%\" >nul
 copy /Y "%PROJECT_ROOT%\tools\install.ps1"     "%OUT_DIR%\" >nul
