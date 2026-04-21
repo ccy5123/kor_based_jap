@@ -4,29 +4,12 @@
 #include "BatchimLookup.h"  // includes mapping_table.h + batchim_rules.h
 #include "Dictionary.h"
 #include "CandidateWindow.h"
+#include "KanaConv.h"
 #include "DebugLog.h"
 #include <algorithm>
 
-// ============================================================================
-// Katakana conversion helpers
-// ============================================================================
-
-// Convert a single hiragana codepoint to full-width katakana.
-// Hiragana U+3041..U+3096 → Katakana U+30A1..U+30F6 (offset +0x60).
-// Characters outside this block (e.g., ー U+30FC, ん U+3093→ン) are also handled.
-static wchar_t toKatakana(wchar_t h) noexcept {
-    if (h >= 0x3041 && h <= 0x3096) return static_cast<wchar_t>(h + 0x60);
-    if (h == 0x3093) return 0x30F3; // ん → ン
-    if (h == 0x3063) return 0x30C3; // っ → ッ
-    return h; // already katakana, ー, or other — pass through
-}
-
-static std::wstring toKatakanaStr(const std::wstring& s) {
-    std::wstring out;
-    out.reserve(s.size());
-    for (wchar_t c : s) out += toKatakana(c);
-    return out;
-}
+// (Hiragana <-> katakana helpers live in KanaConv.h, shared with KorJpnIme.)
+using kana::toKatakanaStr;
 
 // ============================================================================
 // VkToJamo — Korean 2-beolsik layout
@@ -509,6 +492,11 @@ STDMETHODIMP KeyHandler::OnTestKeyDown(ITfContext *pCtx, WPARAM wParam,
     bool alt  = (GetKeyState(VK_MENU)    & 0x8000) != 0;
     bool win  = (GetKeyState(VK_LWIN)    & 0x8000) != 0
              || (GetKeyState(VK_RWIN)    & 0x8000) != 0;
+    bool sh2  = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
+    // Exception: Ctrl+;  is OUR katakana-mode toggle — eat it.
+    if (ctrl && !sh2 && !alt && !win && vk == VK_OEM_1) {
+        *pfEaten = TRUE; return S_OK;
+    }
     if (ctrl || alt || win) { *pfEaten = FALSE; return S_OK; }
 
     bool shifted = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
@@ -596,20 +584,26 @@ static bool FlushAndCommit(KorJpnIme *pIme, HangulComposer& composer, ITfContext
     return true;
 }
 
-// Try to start kanji conversion.  Strategy:
+// Try to start kanji conversion.  Strategy (reverted to the simple,
+// predictable behaviour):
 //   1. Flush any in-progress syllable into _pendingKana.
-//   2. For EACH valid prefix length (longest to shortest), gather candidates
-//      from UserDict + Dictionary.
-//   3. Order the prefix groups so the most "useful" group comes first.  We
-//      use a heuristic: sort by candidate count descending (a prefix with
-//      many entries is likely a common word), with prefix length descending
-//      as a tiebreaker.  This avoids the "rare proper noun beats common
-//      short word" problem (e.g. わたしの→渡志野 hiding わたし→私).
-//   4. Take top N candidates from each group, dedup across groups (keep the
-//      first occurrence so longer prefixes win on identical kanji).
-//   5. Always include the FULL pending as a final raw-kana fallback.
-//   6. Enter conversion mode passing the parallel (candidate, prefix) arrays
-//      so the commit step knows exactly how much pending to consume.
+//   2. Find the LONGEST prefix of _pendingKana that has any dictionary
+//      candidates (UserDict first, then system Dictionary).  If nothing
+//      matches at any prefix length, fall back to the full pending string
+//      committed raw as hiragana.
+//   3. Build the candidate list for THAT prefix:
+//        a. user-learned picks (UserDict.GetPreferred, sorted by usage count
+//           desc — this is what makes the IME "remember" your choices)
+//        b. system dictionary entries (mecab-ipadic, intrinsic frequency order)
+//        c. the raw matched prefix as kana (always last fallback)
+//      Dedup while preserving order so user picks bubble to the top.
+//   4. Every candidate carries the SAME prefix (the matched one).  Anything
+//      after the prefix in _pendingKana stays as preedit after commit so the
+//      user can convert the rest as the next segment.
+//
+// (No multi-prefix gathering, no 2-segment composition — those were tried
+// previously and disrupted both the user-learning ordering and obvious
+// candidate visibility.)
 static bool TryStartConversion(KorJpnIme *pIme, HangulComposer& composer, ITfContext *pCtx) {
     std::wstring tail = composer.flush();
     if (!tail.empty()) AppendKanaFor(pIme, tail[0], 0);
@@ -627,80 +621,38 @@ static bool TryStartConversion(KorJpnIme *pIme, HangulComposer& composer, ITfCon
             if (std::find(v.begin(), v.end(), s) != v.end()) return;
             v.push_back(s);
         };
-        for (auto& k : udict.GetPreferred(key)) pushU(k);
-        if (dict) for (auto& k : dict->Lookup(key)) pushU(k);
+        for (auto& k : udict.GetPreferred(key)) pushU(k);     // user-learned first
+        if (dict) for (auto& k : dict->Lookup(key)) pushU(k); // system dict
         return v;
     };
 
-    // Gather (prefix, candidates) for every prefix length that has anything
-    struct PrefixGroup { std::wstring prefix; std::vector<std::wstring> cands; };
-    std::vector<PrefixGroup> groups;
+    // Find the LONGEST prefix that has any candidates.
+    std::wstring matched;
+    std::vector<std::wstring> cands;
     for (size_t len = pending.size(); len > 0; --len) {
         std::wstring prefix = pending.substr(0, len);
         auto v = candidatesFor(prefix);
-        if (!v.empty()) groups.push_back({std::move(prefix), std::move(v)});
-    }
-
-    // Order: more candidates first (= more common word), longer prefix on tie.
-    std::sort(groups.begin(), groups.end(),
-        [](const PrefixGroup& a, const PrefixGroup& b) {
-            if (a.cands.size() != b.cands.size())
-                return a.cands.size() > b.cands.size();
-            return a.prefix.size() > b.prefix.size();
-        });
-
-    constexpr int kPerGroupLimit = 5;
-    constexpr int kTotalLimit    = 30;
-
-    std::vector<std::wstring> outCands, outPrefixes;
-    auto pushUniqueWithPrefix = [&](const std::wstring& kanji, const std::wstring& prefix) {
-        if (kanji.empty()) return;
-        for (auto& c : outCands) if (c == kanji) return;
-        outCands.push_back(kanji);
-        outPrefixes.push_back(prefix);
-    };
-
-    // ----- Step A: 2-segment composed candidates (head kanji + tail kana) ----
-    // Lightweight stand-in for sentence segmentation: for every prefix shorter
-    // than `pending` that has dictionary candidates, build "<top_kanji><rest_kana>".
-    // Example: わたしの → わたし(私) + remainder の → "私の".  Committing
-    // any of these consumes the full pending so the remainder doesn't linger.
-    for (auto& g : groups) {
-        if ((int)outCands.size() >= kTotalLimit) break;
-        if (g.prefix.size() == pending.size()) continue;  // would just duplicate single
-        if (g.cands.empty()) continue;
-        std::wstring rest = pending.substr(g.prefix.size());
-        // Take top 2 kanji of this prefix, combine with the rest as raw kana
-        int taken = 0;
-        for (auto& k : g.cands) {
-            if (taken >= 2) break;
-            pushUniqueWithPrefix(k + rest, pending);
-            ++taken;
+        if (!v.empty()) {
+            matched = std::move(prefix);
+            cands   = std::move(v);
+            break;
         }
     }
-
-    // ----- Step B: single-prefix candidates --------------------------------
-    for (auto& g : groups) {
-        if ((int)outCands.size() >= kTotalLimit) break;
-        int added = 0;
-        for (auto& k : g.cands) {
-            if (added >= kPerGroupLimit) break;
-            if ((int)outCands.size() >= kTotalLimit) break;
-            size_t before = outCands.size();
-            pushUniqueWithPrefix(k, g.prefix);
-            if (outCands.size() > before) ++added;
-        }
-        // Raw prefix as fallback for this group
-        if (added > 0 && (int)outCands.size() < kTotalLimit) {
-            pushUniqueWithPrefix(g.prefix, g.prefix);
-        }
+    if (matched.empty()) {
+        // No prefix had any dict entries — let the user commit the whole
+        // pending as raw kana via the candidate window's fallback.
+        matched = pending;
     }
 
-    // Always offer the full pending as the very last raw fallback.
-    pushUniqueWithPrefix(pending, pending);
+    // Always include the raw matched kana at the end as a fallback.
+    if (std::find(cands.begin(), cands.end(), matched) == cands.end()) {
+        cands.push_back(matched);
+    }
+    if (cands.empty()) return false;
 
-    if (outCands.empty()) return false;
-    pIme->EnterConversion(outCands, outPrefixes, pCtx);
+    // Every candidate consumes the same matched prefix.
+    std::vector<std::wstring> prefixes(cands.size(), matched);
+    pIme->EnterConversion(cands, prefixes, pCtx);
     return true;
 }
 
@@ -781,6 +733,21 @@ STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
     bool alt  = (GetKeyState(VK_MENU)    & 0x8000) != 0;
     bool win  = (GetKeyState(VK_LWIN)    & 0x8000) != 0
              || (GetKeyState(VK_RWIN)    & 0x8000) != 0;
+
+    // IME-specific shortcut taking precedence over the generic modifier
+    // pass-through:  Ctrl+;  toggles persistent katakana mode.
+    // (Standard JP-IME would use the dedicated カナ key, which Korean
+    // keyboards lack.  F-keys are reserved for the standard one-shot
+    // F6/F7 conversion convention.)
+    if (ctrl && !shifted && !alt && !win && vk == VK_OEM_1) {
+        _pIme->ToggleKatakanaMode();
+        if (!_pIme->PendingKana().empty()) {
+            _pIme->UpdatePreedit(pCtx, BuildPreedit(_pIme, _composer));
+        }
+        *pfEaten = TRUE;
+        return S_OK;
+    }
+
     if (ctrl || alt || win) {
         // Flush so any in-progress preedit is committed before the shortcut runs.
         FlushAndCommit(_pIme, _composer, pCtx);

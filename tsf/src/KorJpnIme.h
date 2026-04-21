@@ -3,6 +3,7 @@
 #include "Dictionary.h"
 #include "UserDict.h"
 #include "CandidateWindow.h"
+#include "KanaConv.h"
 #include <string>
 #include <vector>
 
@@ -51,9 +52,26 @@ public:
     // Kana accumulation buffer for standard JP-IME-style preedit.
     // KeyHandler appends to this buffer when a syllable completes; Space
     // triggers conversion (kanji candidate window); Enter commits raw kana.
+    // When katakana mode is on, appended kana is upper-cased to katakana.
     const std::wstring& PendingKana() const { return _pendingKana; }
-    void                AppendKana(const std::wstring& kana) { _pendingKana += kana; }
-    void                ClearPending()                         { _pendingKana.clear(); }
+    void AppendKana(const std::wstring& kana) {
+        _pendingKana += _katakanaMode ? kana::toKatakanaStr(kana) : kana;
+    }
+    void ClearPending() { _pendingKana.clear(); }
+
+    // Katakana mode toggle (F9 by default).  When on, all newly-appended kana
+    // are stored as katakana and the preedit display reflects that.  Existing
+    // pending kana is converted in place when the mode changes so the user
+    // sees an immediate visual effect.
+    bool IsKatakanaMode() const { return _katakanaMode; }
+    void ToggleKatakanaMode() {
+        _katakanaMode = !_katakanaMode;
+        if (!_pendingKana.empty()) {
+            _pendingKana = _katakanaMode
+                ? kana::toKatakanaStr(_pendingKana)
+                : kana::toHiraganaStr(_pendingKana);
+        }
+    }
 
     // ---- Kanji conversion mode -------------------------------------------
     // Enter: dictionary lookup just produced candidates; show the popup and
@@ -117,4 +135,5 @@ private:
     bool            _hasCaretRect = false;
     ITfContext     *_convCtx = nullptr;        // AddRef'd while in conversion mode
     std::vector<std::wstring> _candidatePrefixes;   // parallel to candidates list
+    bool            _katakanaMode = false;          // F9 toggle
 };

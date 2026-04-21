@@ -44,33 +44,39 @@ build_msvc.bat
 
 Output: `%TEMP%\KorJpnIme_msvc\KorJpnIme.dll` (~43 KB)
 
-### Install
+### One-shot release build
 
 ```cmd
-:: 1. Copy DLL to a permanent location
-mkdir C:\KorJpnIme
-copy %TEMP%\KorJpnIme_msvc\KorJpnIme.dll C:\KorJpnIme\
-
-:: 2. Register the COM CLSID (admin cmd)
-regsvr32 C:\KorJpnIme\KorJpnIme.dll
-
-:: 3. Import the TSF TIP profile (admin cmd) — IME registered DISABLED by default
-reg import C:\KorJpnIme\install_tip.reg
-
-:: 4. Log out and log back in (ctfmon picks up the new TIP at session start)
-
-:: 5. Settings → Time & Language → Language → Korean
-::    → Language options → Add a keyboard → "Korean-Japanese IME"
-
-:: 6. Use Win+Space to switch input methods
+tools\make_release.bat
 ```
+
+Produces `C:\Temp\KorJpnIme_release\` with everything needed (DLL,
+dictionary, .reg files, install/uninstall scripts).  Zip it up and
+distribute as-is.
+
+### Install
+
+```powershell
+# From the release folder (or anywhere with KorJpnIme.dll + install_tip.reg next to install.ps1):
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+The script:
+1. Self-elevates (UAC prompt).
+2. Copies files to `C:\Program Files\KorJpnIme\`.
+3. `regsvr32` the DLL.
+4. `reg import install_tip.reg` (TIP registered with `Enable=0`).
+5. Tells you to log out / in, then add the IME via Settings UI.
+
+After login: **Settings → Time & Language → Language → Korean → Language options → Add a keyboard → Korean-Japanese IME**.
+
+Use **Win + Space** to switch input methods.
 
 ### Uninstall
 
-```cmd
-reg import C:\KorJpnIme\uninstall_tip.reg
-regsvr32 /u C:\KorJpnIme\KorJpnIme.dll
-:: log out + log in
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Program Files\KorJpnIme\uninstall.ps1"
+# Add -RemoveFiles to also delete the install directory
 ```
 
 ## Architecture
