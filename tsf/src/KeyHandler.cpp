@@ -209,17 +209,29 @@ std::wstring HangulComposer::input(wchar_t jamo) {
             }
         }
 
-        // Special pattern: a second ㅗ in 오 (silent ㅇ + ㅗ) state emits
-        // the Japanese を particle.  Korean has no syllable that combines
-        // two consecutive ㅗ vowels in the same block, so this otherwise-
-        // meaningless keystroke pattern is repurposed.  The full sequence
-        // ㅇ-ㅗ-ㅗ produces を with no remaining preedit state.  Real
-        // 오오 (おお, e.g. 大きい) is unaffected because it requires the
-        // explicit cho ㅇ between the two vowels (ㅇ-ㅗ-ㅇ-ㅗ -> 오오).
-        if (_cho == 11 && _rawJung == L'\u3157' /* ㅗ */
-                       && jamo     == L'\u3157' /* ㅗ */) {
-            reset();
-            return std::wstring(1, kWoMarker);
+        // Special patterns: doubled final-vowel jamo after a silent-ㅇ
+        // onset have no native Korean meaning (the second vowel would
+        // normally split into a new syllable), so the keystroke pattern
+        // is repurposed for Japanese particles whose written form differs
+        // from pronunciation.
+        //
+        //   ㅇ-ㅗ-ㅗ -> を   (object particle, normally read as "o")
+        //   ㅇ-ㅘ-ㅏ -> は   (topic particle,  normally read as "wa";
+        //                     ㅘ comes from the ㅗ+ㅏ compound vowel)
+        //   ㅇ-ㅔ-ㅔ -> へ   (direction particle, normally read as "e")
+        //
+        // Real long-vowel forms (おお, ええ, etc.) require the explicit
+        // ㅇ between vowels (ㅇ-ㅗ-ㅇ-ㅗ, ㅇ-ㅔ-ㅇ-ㅔ) and are unaffected.
+        if (_cho == 11) {
+            if (_rawJung == L'ㅗ' && jamo == L'ㅗ') {
+                reset(); return std::wstring(1, kWoMarker);
+            }
+            if (_rawJung == L'ㅘ' && jamo == L'ㅏ') {
+                reset(); return std::wstring(1, kWaMarker);
+            }
+            if (_rawJung == L'ㅔ' && jamo == L'ㅔ') {
+                reset(); return std::wstring(1, kEMarker);
+            }
         }
 
         // Consonant that can be jongseong → make it the jong of current syllable
@@ -1058,12 +1070,19 @@ STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
     if (!completed.empty()) {
         // At most one syllable is completed per keystroke (see HangulComposer invariant).
         // The triggering jamo is the next initial consonant — pass as context for
-        // sokuon_strict / sokuon_universal decisions.
-        if (completed[0] == HangulComposer::kWoMarker) {
-            // Special pattern ㅇ-ㅗ-ㅗ -> を (object particle).  Append directly;
-            // AppendKana respects the persistent katakana toggle so the result
-            // becomes ヲ when that mode is active.
-            _pIme->AppendKana(L"\u3092");
+        // sokuon_strict / sokuon_universal decisions.  Doubled-vowel sentinels
+        // produced by the special patterns get translated directly to the
+        // Japanese particle they represent; AppendKana honours the persistent
+        // katakana toggle so the result becomes ヲ / ハ / ヘ when that mode
+        // is active.
+        const wchar_t *particle = nullptr;
+        switch (completed[0]) {
+            case HangulComposer::kWoMarker: particle = L"\u3092"; break;  // を
+            case HangulComposer::kWaMarker: particle = L"\u306F"; break;  // は
+            case HangulComposer::kEMarker:  particle = L"\u3078"; break;  // へ
+        }
+        if (particle) {
+            _pIme->AppendKana(particle);
         } else {
             AppendKanaFor(_pIme, completed[0], jamo);
         }

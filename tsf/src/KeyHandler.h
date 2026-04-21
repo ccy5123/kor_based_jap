@@ -10,18 +10,30 @@ class HangulComposer {
 public:
     HangulComposer();
 
-    // Sentinel character (Unicode private-use area) returned from input()
+    // Sentinel characters (Unicode private-use area) returned from input()
     // when a Korean keystroke pattern with no native meaning is repurposed
-    // to emit a Japanese-only kana.  The call site translates the marker to
-    // the real kana before appending to the pending buffer.
+    // to emit a Japanese-only kana.  The call site translates each marker
+    // to its real kana before appending to the pending buffer.
     //
-    //   kWoMarker = ㅇ-ㅗ-ㅗ -> を   (Japanese object particle "wo")
-    //               ㅇ-ㅗ-ㅇ-ㅗ stays as 오오 -> おお (long vowel intact)
+    // The pattern is always "doubled final vowel after silent ㅇ", which
+    // never produces anything sensible in Korean orthography (the second
+    // vowel is forced to start a new syllable, requiring an explicit ㅇ
+    // between them).  These patterns are bound to the three Japanese
+    // particles whose written form differs from their pronunciation:
     //
-    // The marker is never displayed to the user -- it lives only in the
-    // brief gap between HangulComposer::input() returning and the call site
-    // mapping it to actual kana.
+    //   kWoMarker = ㅇ-ㅗ-ㅗ -> を   (object particle, pronounced "o")
+    //   kWaMarker = ㅇ-ㅘ-ㅏ -> は   (topic particle,  pronounced "wa")
+    //   kEMarker  = ㅇ-ㅔ-ㅔ -> へ   (direction particle, pronounced "e")
+    //
+    // Real long vowels (おお from ㅇ-ㅗ-ㅇ-ㅗ, ええ from ㅇ-ㅔ-ㅇ-ㅔ, etc.)
+    // are unaffected because they require the explicit ㅇ between vowels.
+    //
+    // The markers are never displayed to the user -- they live only in
+    // the brief gap between HangulComposer::input() returning and the
+    // call site mapping them to actual kana.
     static constexpr wchar_t kWoMarker = L'\uE000';
+    static constexpr wchar_t kWaMarker = L'\uE001';
+    static constexpr wchar_t kEMarker  = L'\uE002';
 
     // Feed one jamo (or Latin key). Returns:
     //   - completed syllable if one was just finished (NFC unicode char as wstring)
