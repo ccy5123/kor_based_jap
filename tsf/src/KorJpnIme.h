@@ -62,13 +62,25 @@ public:
     // is decided by the caller.
     bool IsInConversion() const { return _inConversion; }
     CandidateWindow& GetCandidateWindow() { return _candidateWindow; }
-    void EnterConversion(const std::vector<std::wstring>& candidates) {
-        _inConversion = true;
-        _candidateWindow.Show(candidates);
-    }
-    void ExitConversion() {
-        _inConversion = false;
-        _candidateWindow.Hide();
+
+    // EnterConversion remembers the active context (AddRef'd) so that mouse
+    // clicks on the candidate window — which arrive outside the OnKeyDown
+    // call — can still commit text via OnCandidateClicked().
+    void EnterConversion(const std::vector<std::wstring>& candidates,
+                         ITfContext *pCtx);
+    void ExitConversion();
+
+    // Called by CandidateWindow when the user picks a candidate with the mouse.
+    void OnCandidateClicked(int idx);
+
+    // Caret rect (screen coordinates of the preedit text), updated by
+    // Composition's edit sessions via ITfContextView::GetTextExt so the
+    // candidate window can pop up exactly under the user's preedit.
+    void SetCaretRect(const RECT& r) { _caretRect = r; _hasCaretRect = true; }
+    bool GetCaretRect(RECT *out) const {
+        if (!_hasCaretRect) return false;
+        *out = _caretRect;
+        return true;
     }
 
 private:
@@ -89,4 +101,8 @@ private:
     std::wstring    _pendingKana;     // accumulated kana waiting for commit/conversion
     CandidateWindow _candidateWindow;
     bool            _inConversion = false;
+
+    RECT            _caretRect = {};  // screen coords of last known preedit
+    bool            _hasCaretRect = false;
+    ITfContext     *_convCtx = nullptr;  // AddRef'd while in conversion mode
 };

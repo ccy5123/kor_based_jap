@@ -450,6 +450,7 @@ STDMETHODIMP KeyHandler::OnTestKeyDown(ITfContext *pCtx, WPARAM wParam,
     if (_pIme->IsInConversion()) {
         if (vk == VK_SPACE  || vk == VK_TAB   || vk == VK_RETURN
          || vk == VK_ESCAPE || vk == VK_UP    || vk == VK_DOWN
+         || vk == VK_PRIOR  || vk == VK_NEXT
          || (vk >= '1' && vk <= '9')) {
             *pfEaten = TRUE; return S_OK;
         }
@@ -554,7 +555,7 @@ static bool FlushAndCommit(KorJpnIme *pIme, HangulComposer& composer, ITfContext
 //   3. The raw kana itself (always last fallback, so the user can type words
 //      that have no dictionary entry and still commit them as hiragana).
 // Duplicates are dropped while preserving the user-preferred entries' priority.
-static bool TryStartConversion(KorJpnIme *pIme, HangulComposer& composer) {
+static bool TryStartConversion(KorJpnIme *pIme, HangulComposer& composer, ITfContext *pCtx) {
     // Flush any in-progress syllable into pending so the lookup uses the full word.
     std::wstring tail = composer.flush();
     if (!tail.empty()) AppendKanaFor(pIme, tail[0], 0);
@@ -584,7 +585,7 @@ static bool TryStartConversion(KorJpnIme *pIme, HangulComposer& composer) {
     pushUnique(pending);
 
     if (candidates.empty()) return false;
-    pIme->EnterConversion(candidates);
+    pIme->EnterConversion(candidates, pCtx);
     return true;
 }
 
@@ -695,22 +696,34 @@ STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
     // processed against an empty composer.
     if (_pIme->IsInConversion()) {
         CandidateWindow& cw = _pIme->GetCandidateWindow();
-        if (vk == VK_SPACE || vk == VK_TAB || vk == VK_DOWN) {
+        if (vk == VK_SPACE || vk == VK_DOWN) {
             cw.SelectNext();
+            *pfEaten = TRUE; return S_OK;
+        }
+        if (vk == VK_TAB) {
+            // Tab "expands" the candidate window so the user can browse a
+            // larger list with arrow keys or pick with the mouse.  Once
+            // expanded it stays that way for the rest of this conversion.
+            cw.SetExpanded(true);
             *pfEaten = TRUE; return S_OK;
         }
         if (vk == VK_UP) {
             cw.SelectPrev();
             *pfEaten = TRUE; return S_OK;
         }
+        if (vk == VK_NEXT) {        // PageDown
+            cw.NextPage();
+            *pfEaten = TRUE; return S_OK;
+        }
+        if (vk == VK_PRIOR) {       // PageUp
+            cw.PrevPage();
+            *pfEaten = TRUE; return S_OK;
+        }
         if (vk >= '1' && vk <= '9') {
-            int idx = vk - '1';
-            if (idx < cw.Count()) {
-                cw.SetSelectedIndex(idx);
+            int slot = vk - '1';     // 0..8 within current page
+            if (cw.SelectOnPage(slot)) {
                 CommitSelectedCandidate(_pIme, pCtx);
-                *pfEaten = TRUE; return S_OK;
             }
-            // 6..9 with fewer candidates → ignore for now
             *pfEaten = TRUE; return S_OK;
         }
         if (vk == VK_RETURN) {
@@ -745,7 +758,7 @@ STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
     // word); Enter / Tab commit raw without conversion.
     if (vk == VK_SPACE) {
         bool hadComposing = !_composer.empty() || !_pIme->PendingKana().empty();
-        if (hadComposing && TryStartConversion(_pIme, _composer)) {
+        if (hadComposing && TryStartConversion(_pIme, _composer, pCtx)) {
             *pfEaten = TRUE; return S_OK;
         }
         FlushAndCommit(_pIme, _composer, pCtx);

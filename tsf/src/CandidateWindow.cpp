@@ -1,5 +1,7 @@
 #include "CandidateWindow.h"
+#include "KorJpnIme.h"
 #include "DebugLog.h"
+#include <windowsx.h>     // GET_X_LPARAM / GET_Y_LPARAM
 #include <algorithm>
 #include <cwchar>
 
@@ -71,21 +73,89 @@ bool CandidateWindow::EnsureWindow() {
     return true;
 }
 
-void CandidateWindow::Show(const std::vector<std::wstring>& candidates) {
+void CandidateWindow::Show(const std::vector<std::wstring>& candidates,
+                            const RECT *caretRect) {
     _candidates  = candidates;
     _selectedIdx = 0;
+    _expanded    = false;        // every fresh Show() starts in compact mode
 
     if (!EnsureWindow()) return;
 
-    int shownCount = std::min<int>(Count(), PageSize());
-    if (shownCount <= 0) shownCount = 1;
-    int height = kPaddingY * 2 + kLineHeight * shownCount;
+    // Window height = padding + visible rows + (optional) page-footer line + padding
+    int rows = std::min<int>(Count(), RowsPerView());
+    if (rows <= 0) rows = 1;
+    int extraFooter = (!_expanded && PageCount() > 1) ? kLineHeight : 0;
+    int height = kPaddingY * 2 + kLineHeight * rows + extraFooter;
 
-    PositionAtCaret();
-    SetWindowPos(_hWnd, HWND_TOPMOST, 0, 0, kMinWidth, height,
-                 SWP_NOACTIVATE | SWP_NOMOVE | SWP_SHOWWINDOW);
+    if (caretRect) {
+        _lastCaretRect      = *caretRect;
+        _haveLastCaretRect  = true;
+        Reposition(kMinWidth, height);
+        ShowWindow(_hWnd, SW_SHOWNOACTIVATE);
+    } else {
+        _haveLastCaretRect = false;
+        PositionAtCaret();   // fallback (GetGUIThreadInfo / fg-window)
+        SetWindowPos(_hWnd, HWND_TOPMOST, 0, 0, kMinWidth, height,
+                     SWP_NOACTIVATE | SWP_NOMOVE | SWP_SHOWWINDOW);
+    }
     Repaint();
     _visible = true;
+}
+
+void CandidateWindow::SetExpanded(bool on) {
+    if (_expanded == on || !_hWnd) { _expanded = on; return; }
+    _expanded = on;
+
+    int rows = std::min<int>(Count(), RowsPerView());
+    if (rows <= 0) rows = 1;
+    int extraFooter = (!_expanded && PageCount() > 1) ? kLineHeight : 0;
+    int height = kPaddingY * 2 + kLineHeight * rows + extraFooter;
+
+    // If we know the caret rect, recompute position so the (now taller) window
+    // stays inside the work area — flips to above-caret when there's no room
+    // below.  Without a known caret rect, just resize in place.
+    if (_haveLastCaretRect) {
+        Reposition(kMinWidth, height);
+    } else {
+        SetWindowPos(_hWnd, HWND_TOPMOST, 0, 0, kMinWidth, height,
+                     SWP_NOACTIVATE | SWP_NOMOVE | SWP_SHOWWINDOW);
+    }
+    Repaint();
+}
+
+void CandidateWindow::Reposition(int width, int height) {
+    if (!_hWnd) return;
+
+    HMONITOR hMon = _haveLastCaretRect
+        ? MonitorFromRect(&_lastCaretRect, MONITOR_DEFAULTTONEAREST)
+        : MonitorFromWindow(_hWnd, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO mi = { sizeof(mi) };
+    RECT work;
+    if (hMon && GetMonitorInfo(hMon, &mi)) {
+        work = mi.rcWork;
+    } else if (!SystemParametersInfo(SPI_GETWORKAREA, 0, &work, 0)) {
+        work = { 0, 0, GetSystemMetrics(SM_CXSCREEN),
+                        GetSystemMetrics(SM_CYSCREEN) };
+    }
+
+    int x, y;
+    if (_haveLastCaretRect) {
+        x = _lastCaretRect.left;
+        y = _lastCaretRect.bottom + 2;          // try below
+        if (y + height > work.bottom) {
+            int above = _lastCaretRect.top - 2 - height;
+            y = (above < work.top) ? work.top : above;
+        }
+    } else {
+        // No caret info — place at top-left of work area
+        x = work.left + 100;
+        y = work.top + 100;
+    }
+    if (x + width > work.right)  x = work.right - width;
+    if (x < work.left)           x = work.left;
+
+    SetWindowPos(_hWnd, HWND_TOPMOST, x, y, width, height,
+                 SWP_NOACTIVATE);
 }
 
 void CandidateWindow::Hide() {
@@ -101,14 +171,45 @@ void CandidateWindow::SetSelectedIndex(int idx) {
 
 void CandidateWindow::SelectNext() {
     if (Count() == 0) return;
+    int prevPage = CurrentPage();
     _selectedIdx = (_selectedIdx + 1) % Count();
     Repaint();
+    (void)prevPage;  // page change is implicit via repaint of new range
 }
 
 void CandidateWindow::SelectPrev() {
     if (Count() == 0) return;
     _selectedIdx = (_selectedIdx - 1 + Count()) % Count();
     Repaint();
+}
+
+void CandidateWindow::NextPage() {
+    if (PageCount() <= 1) return;
+    int slot = _selectedIdx % PageSize();
+    int nextPage = (CurrentPage() + 1) % PageCount();
+    int target   = nextPage * PageSize() + slot;
+    if (target >= Count()) target = Count() - 1;
+    _selectedIdx = target;
+    Repaint();
+}
+
+void CandidateWindow::PrevPage() {
+    if (PageCount() <= 1) return;
+    int slot = _selectedIdx % PageSize();
+    int prevPage = (CurrentPage() - 1 + PageCount()) % PageCount();
+    int target   = prevPage * PageSize() + slot;
+    if (target >= Count()) target = Count() - 1;
+    _selectedIdx = target;
+    Repaint();
+}
+
+bool CandidateWindow::SelectOnPage(int slot) {
+    if (slot < 0 || slot >= PageSize()) return false;
+    int target = CurrentPage() * PageSize() + slot;
+    if (target >= Count()) return false;
+    _selectedIdx = target;
+    Repaint();
+    return true;
 }
 
 void CandidateWindow::Repaint() {
@@ -150,10 +251,30 @@ void CandidateWindow::OnPaint(HDC hdc) {
     if (_hFont) oldFont = static_cast<HFONT>(SelectObject(hdc, _hFont));
     SetBkMode(hdc, TRANSPARENT);
 
-    int shown = std::min<int>(Count(), PageSize());
+    // Determine the visible window into _candidates.
+    // - Compact mode: show one PageSize() block; numeric prefix is the page-local slot (1-9).
+    // - Expanded mode: scroll so the selected row stays visible; show kExpandedRows;
+    //   numeric prefix is omitted (digits 1-9 still pick the first nine of the
+    //   visible block, preserving compatibility).
+    int viewStart;
+    int viewRows = RowsPerView();
+    if (_expanded) {
+        // Keep selection visible
+        if (_selectedIdx < viewRows / 2) {
+            viewStart = 0;
+        } else {
+            viewStart = std::min<int>(_selectedIdx - viewRows / 2,
+                                      std::max<int>(0, Count() - viewRows));
+        }
+    } else {
+        viewStart = CurrentPage() * PageSize();
+    }
+    int viewEnd = std::min<int>(viewStart + viewRows, Count());
+
     int y = kPaddingY;
-    for (int i = 0; i < shown; ++i) {
+    for (int i = viewStart; i < viewEnd; ++i) {
         const bool selected = (i == _selectedIdx);
+        const int  slot     = i - viewStart;       // 0-based within visible block
 
         if (selected) {
             RECT row = { rc.left, y, rc.right, y + kLineHeight };
@@ -165,14 +286,27 @@ void CandidateWindow::OnPaint(HDC hdc) {
             SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
         }
 
-        wchar_t prefix[8];
-        swprintf_s(prefix, L"%d. ", i + 1);
-        std::wstring line = prefix;
+        std::wstring line;
+        if (slot < 9) {
+            wchar_t prefix[8];
+            swprintf_s(prefix, L"%d. ", slot + 1);
+            line = prefix;
+        } else {
+            line = L"   ";   // align with prefixed rows
+        }
         line += _candidates[i];
 
         TextOutW(hdc, kPaddingX, y + 3,
                  line.c_str(), static_cast<int>(line.size()));
         y += kLineHeight;
+    }
+
+    // Page footer (compact mode only)
+    if (!_expanded && PageCount() > 1) {
+        SetTextColor(hdc, GetSysColor(COLOR_GRAYTEXT));
+        wchar_t foot[16];
+        swprintf_s(foot, L"%d/%d", CurrentPage() + 1, PageCount());
+        TextOutW(hdc, kPaddingX, y, foot, static_cast<int>(wcslen(foot)));
     }
 
     if (oldFont) SelectObject(hdc, oldFont);
@@ -193,6 +327,39 @@ LRESULT CALLBACK CandidateWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LP
             HDC hdc = BeginPaint(hWnd, &ps);
             if (self) self->OnPaint(hdc);
             EndPaint(hWnd, &ps);
+            return 0;
+        }
+        case WM_MOUSEMOVE:
+        case WM_LBUTTONDOWN: {
+            if (!self || self->Count() == 0) return 0;
+            int yClient = GET_Y_LPARAM(lParam);
+            int row = (yClient - kPaddingY) / kLineHeight;
+            // Same view-window calculation as OnPaint
+            int viewStart;
+            int viewRows = self->RowsPerView();
+            if (self->_expanded) {
+                if (self->_selectedIdx < viewRows / 2) {
+                    viewStart = 0;
+                } else {
+                    viewStart = std::min<int>(self->_selectedIdx - viewRows / 2,
+                                std::max<int>(0, self->Count() - viewRows));
+                }
+            } else {
+                viewStart = self->CurrentPage() * self->PageSize();
+            }
+            int idx = viewStart + row;
+            if (idx < 0 || idx >= self->Count()) return 0;
+
+            if (msg == WM_MOUSEMOVE) {
+                if (idx != self->_selectedIdx) {
+                    self->_selectedIdx = idx;
+                    self->Repaint();
+                }
+            } else /* WM_LBUTTONDOWN */ {
+                self->_selectedIdx = idx;
+                self->Repaint();
+                if (self->_pIme) self->_pIme->OnCandidateClicked(idx);
+            }
             return 0;
         }
         case WM_MOUSEACTIVATE:

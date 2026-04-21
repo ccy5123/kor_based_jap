@@ -18,6 +18,11 @@ public:
     void _SetComposition(ITfComposition *pComp);
     void _ClearComposition();
 
+    // Called from edit-session callbacks: queries TSF for the screen-coordinate
+    // bounding box of the composition range and caches it on the IME so the
+    // candidate window can pop up next to the actual preedit.
+    void _UpdateCaretRect(TfEditCookie ec, ITfContext *pCtx, ITfComposition *pComp);
+
     // IUnknown
     STDMETHODIMP         QueryInterface(REFIID riid, void **ppv) override;
     STDMETHODIMP_(ULONG) AddRef()  override;

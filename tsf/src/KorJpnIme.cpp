@@ -43,6 +43,9 @@ STDMETHODIMP KorJpnIme::Activate(ITfThreadMgr *pThreadMgr, TfClientId tid) {
     _pThreadMgr = pThreadMgr;
     _tid        = tid;
 
+    // Wire ourselves to the candidate window so mouse clicks can call back.
+    _candidateWindow.SetOwner(this);
+
     // Lazy-load the kana→kanji dictionary on first activation.
     // (Subsequent activations in the same DLL instance reuse the loaded data.)
     if (!_dictTried) {
@@ -112,6 +115,38 @@ HRESULT KorJpnIme::CommitText(ITfContext *pCtx, const std::wstring& text) {
 HRESULT KorJpnIme::UpdatePreedit(ITfContext *pCtx, const std::wstring& text) {
     if (!_pComposition) return E_FAIL;
     return _pComposition->UpdatePreedit(pCtx, text);
+}
+
+// ----- Conversion mode lifecycle -------------------------------------------
+void KorJpnIme::EnterConversion(const std::vector<std::wstring>& candidates,
+                                 ITfContext *pCtx) {
+    if (_convCtx) { _convCtx->Release(); _convCtx = nullptr; }
+    if (pCtx) { pCtx->AddRef(); _convCtx = pCtx; }
+    _inConversion = true;
+    _candidateWindow.Show(candidates,
+                          _hasCaretRect ? &_caretRect : nullptr);
+}
+
+void KorJpnIme::ExitConversion() {
+    _inConversion = false;
+    _candidateWindow.Hide();
+    if (_convCtx) { _convCtx->Release(); _convCtx = nullptr; }
+}
+
+void KorJpnIme::OnCandidateClicked(int idx) {
+    if (!_convCtx) return;
+    if (idx < 0 || idx >= _candidateWindow.Count()) return;
+    _candidateWindow.SetSelectedIndex(idx);
+
+    std::wstring sel  = _candidateWindow.GetSelected();
+    std::wstring kana = _pendingKana;   // capture before ClearPending
+    if (!sel.empty()) {
+        CommitText(_convCtx, sel);
+        if (sel != kana) _userDict.Record(kana, sel);
+    }
+    ClearPending();
+    UpdatePreedit(_convCtx, L"");
+    ExitConversion();
 }
 
 // ----------------------------------------------------------------------------

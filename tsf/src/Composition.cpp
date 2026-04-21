@@ -92,6 +92,7 @@ STDMETHODIMP StartAndSetTextSession::DoEditSession(TfEditCookie ec) {
         _pCompMgr->_ClearComposition();
     } else {
         _pCompMgr->_SetComposition(pNewComp);  // ownership transfer
+        _pCompMgr->_UpdateCaretRect(ec, _pCtx, pNewComp);
     }
     DBG("  StartAndSetTextSession OK");
     return S_OK;
@@ -124,6 +125,10 @@ STDMETHODIMP SetTextSession::DoEditSession(TfEditCookie ec) {
         _pCompMgr->_ClearComposition();
     } else {
         pRange->Release();
+        // Re-cache the caret rect after preedit text changes — the box
+        // typically grows/shrinks with each keystroke and we want the
+        // candidate window pinned to its CURRENT bottom edge.
+        _pCompMgr->_UpdateCaretRect(ec, _pCtx, _pComp);
     }
     return S_OK;
 }
@@ -166,6 +171,27 @@ void Composition::_ClearComposition() {
         _pComposition->Release();
         _pComposition = nullptr;
     }
+}
+
+void Composition::_UpdateCaretRect(TfEditCookie ec,
+                                    ITfContext *pCtx,
+                                    ITfComposition *pComp) {
+    if (!pCtx || !pComp || !_pIme) return;
+
+    ITfContextView *pView = nullptr;
+    if (FAILED(pCtx->GetActiveView(&pView)) || !pView) return;
+
+    ITfRange *pRange = nullptr;
+    if (SUCCEEDED(pComp->GetRange(&pRange)) && pRange) {
+        RECT rc = {};
+        BOOL fClipped = FALSE;
+        HRESULT hr = pView->GetTextExt(ec, pRange, &rc, &fClipped);
+        if (SUCCEEDED(hr) && (rc.left | rc.top | rc.right | rc.bottom) != 0) {
+            _pIme->SetCaretRect(rc);
+        }
+        pRange->Release();
+    }
+    pView->Release();
 }
 
 HRESULT Composition::UpdatePreedit(ITfContext *pCtx, const std::wstring& text) {
