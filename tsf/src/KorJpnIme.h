@@ -1,6 +1,8 @@
 #pragma once
 #include "Globals.h"
 #include "Dictionary.h"
+#include "RichDictionary.h"
+#include "Connector.h"
 #include "UserDict.h"
 #include "CandidateWindow.h"
 #include "KanaConv.h"
@@ -49,6 +51,13 @@ public:
     // Per-user learning dictionary (user_dict.txt next to the DLL).
     UserDict&       GetUserDict()       { return _userDict; }
     const UserDict& GetUserDict() const { return _userDict; }
+
+    // Viterbi engine inputs (kj_dict.bin + kj_conn.bin next to the DLL).
+    // Both are optional -- IsLoaded() will be false if the files weren't
+    // shipped or failed to mmap, in which case the converter falls back
+    // to the legacy longest-prefix lookup over Dictionary.
+    const RichDictionary& GetRichDictionary() const { return _richDict; }
+    const Connector&      GetConnector()      const { return _connector; }
 
     // User settings loaded from %APPDATA%\KorJpnIme\settings.ini
     const Settings& GetSettings()        const { return _settings; }
@@ -133,6 +142,8 @@ private:
     bool          _active       = true;
 
     Dictionary      _dict;            // loaded once on first Activate()
+    RichDictionary  _richDict;        // viterbi engine input (kj_dict.bin); empty if file missing
+    Connector       _connector;       // bigram cost matrix (kj_conn.bin); empty if file missing
     UserDict        _userDict;
     Settings        _settings;
     bool            _dictTried = false;

@@ -12,7 +12,9 @@ add_library(KorJpnIme SHARED
     src/KorJpnIme.cpp
     src/KeyHandler.cpp
     src/Composition.cpp
-    src/Dictionary.cpp        # kana→kanji lookup loaded from dict/jpn_dict.txt
+    src/Dictionary.cpp        # legacy kana→kanji text dict (jpn_dict.txt)
+    src/RichDictionary.cpp    # viterbi-engine rich dict w/ lid/rid/cost (kj_dict.bin)
+    src/Connector.cpp         # bigram connection-cost matrix (kj_conn.bin)
     src/UserDict.cpp          # per-user learning dictionary (user_dict.txt)
     src/Settings.cpp          # %APPDATA%\KorJpnIme\settings.ini
     src/CandidateWindow.cpp   # Win32 popup showing kanji candidates

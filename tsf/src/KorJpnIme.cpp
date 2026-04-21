@@ -223,4 +223,29 @@ void KorJpnIme::_LoadDictionary() {
     StringCchCatW (userPath, MAX_PATH, L"user_dict.txt");
     _userDict.Load(userPath);
     DBGF("KorJpnIme::_LoadDictionary user_dict %zu kana keys", _userDict.KeyCount());
+
+    // Viterbi engine inputs (rich dictionary with lid/rid/cost + bigram
+    // connection-cost matrix).  Both are optional -- if either fails to
+    // load, TryStartConversion silently falls back to the legacy
+    // longest-prefix path over Dictionary.
+    wchar_t kjDictPath[MAX_PATH] = {};
+    StringCchCopyW(kjDictPath, MAX_PATH, dllPath);
+    StringCchCatW (kjDictPath, MAX_PATH, L"kj_dict.bin");
+    if (_richDict.Load(kjDictPath)) {
+        DBGF("KorJpnIme::_LoadDictionary kj_dict.bin OK kana=%zu entries=%zu",
+             _richDict.KeyCount(), _richDict.EntryCount());
+    } else {
+        DBG("KorJpnIme::_LoadDictionary kj_dict.bin not loaded "
+            "(viterbi engine disabled, falling back to legacy lookup)");
+    }
+
+    wchar_t kjConnPath[MAX_PATH] = {};
+    StringCchCopyW(kjConnPath, MAX_PATH, dllPath);
+    StringCchCatW (kjConnPath, MAX_PATH, L"kj_conn.bin");
+    if (_connector.Load(kjConnPath)) {
+        DBGF("KorJpnIme::_LoadDictionary kj_conn.bin OK dim=%u",
+             (unsigned)_connector.Dim());
+    } else {
+        DBG("KorJpnIme::_LoadDictionary kj_conn.bin not loaded");
+    }
 }
