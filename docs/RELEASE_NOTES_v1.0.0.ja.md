@@ -3,7 +3,7 @@
 初回公開リリース — 韓国語 2-beolsik キーボードレイアウトで日本語を入力
 できる Windows TSF IME です。Mozc レベルの漢字変換品質を提供します。
 
-> 🌏 Languages: [English](RELEASE_NOTES_v1.0.0.md) · [한국어](RELEASE_NOTES_v1.0.0.ko.md) · **日本語**
+> 🌏 Languages: [English](https://github.com/ccy5123/kor_based_jap/blob/v1.0.0/docs/RELEASE_NOTES_v1.0.0.md) · [한국어](https://github.com/ccy5123/kor_based_jap/blob/v1.0.0/docs/RELEASE_NOTES_v1.0.0.ko.md) · **日本語**
 
 ## インストール
 

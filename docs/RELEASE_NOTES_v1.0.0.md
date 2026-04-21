@@ -3,7 +3,7 @@
 First public release -- a Windows TSF IME that lets you type Japanese on
 a Korean 2-beolsik keyboard layout with Mozc-quality kanji conversion.
 
-> 🌏 Languages: **English** · [한국어](RELEASE_NOTES_v1.0.0.ko.md) · [日本語](RELEASE_NOTES_v1.0.0.ja.md)
+> 🌏 Languages: **English** · [한국어](https://github.com/ccy5123/kor_based_jap/blob/v1.0.0/docs/RELEASE_NOTES_v1.0.0.ko.md) · [日本語](https://github.com/ccy5123/kor_based_jap/blob/v1.0.0/docs/RELEASE_NOTES_v1.0.0.ja.md)
 
 ## Install
 

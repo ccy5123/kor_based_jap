@@ -3,7 +3,7 @@
 최초 공개 릴리스 — 한국어 2벌식 키보드 레이아웃으로 일본어를 입력할 수
 있는 Windows TSF IME입니다. Mozc 수준의 한자 변환 품질을 제공합니다.
 
-> 🌏 Languages: [English](RELEASE_NOTES_v1.0.0.md) · **한국어** · [日本語](RELEASE_NOTES_v1.0.0.ja.md)
+> 🌏 Languages: [English](https://github.com/ccy5123/kor_based_jap/blob/v1.0.0/docs/RELEASE_NOTES_v1.0.0.md) · **한국어** · [日本語](https://github.com/ccy5123/kor_based_jap/blob/v1.0.0/docs/RELEASE_NOTES_v1.0.0.ja.md)
 
 ## 설치 방법
 
