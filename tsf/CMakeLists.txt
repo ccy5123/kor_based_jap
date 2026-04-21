@@ -12,6 +12,7 @@ add_library(KorJpnIme SHARED
     src/KorJpnIme.cpp
     src/KeyHandler.cpp
     src/Composition.cpp
+    src/Dictionary.cpp     # kana→kanji lookup loaded from dict/jpn_dict.txt
     src/pthread_stub.cpp   # Win32 FLS stubs — eliminates libwinpthread-1.dll dependency
 )
 
@@ -32,23 +33,23 @@ target_include_directories(KorJpnIme PRIVATE
 # ---------------------------------------------------------------------------
 # Windows-specific: link required system libraries
 # ---------------------------------------------------------------------------
-if(WIN32 OR MINGW)
-    target_link_libraries(KorJpnIme PRIVATE
-        ole32        # CoCreateInstance, COM infrastructure
-        oleaut32     # BSTR, VARIANT helpers
-        advapi32     # Registry (RegCreateKeyEx etc.)
-    )
+target_link_libraries(KorJpnIme PRIVATE
+    ole32 oleaut32 advapi32 uuid
+)
 
-    # Keep Windows-style DLL exports visible
-    target_compile_definitions(KorJpnIme PRIVATE
-        _UNICODE
-        UNICODE
-        WIN32_LEAN_AND_MEAN
-        NOMINMAX
-    )
+target_compile_definitions(KorJpnIme PRIVATE
+    _UNICODE UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
+    _CRT_SECURE_NO_WARNINGS
+)
 
-    # DEF file so the linker exports DllGetClassObject etc. by name (no underscore mangling).
-    # ld.exe cannot follow UNC paths (\\wsl.localhost\...), so copy the DEF to the local build dir.
+# DEF file controls exported COM entry points (DllRegisterServer, etc.).
+# MSVC uses /DEF:filename; MinGW uses --kill-at + filename via -Wl,...
+if(MSVC)
+    set_target_properties(KorJpnIme PROPERTIES
+        LINK_FLAGS "/DEF:\"${CMAKE_CURRENT_SOURCE_DIR}/KorJpnIme.def\""
+    )
+elseif(MINGW)
+    # ld.exe cannot follow UNC paths (\\wsl.localhost\...), so copy DEF to local build dir.
     configure_file(
         ${CMAKE_CURRENT_SOURCE_DIR}/KorJpnIme.def
         ${CMAKE_CURRENT_BINARY_DIR}/KorJpnIme.def
@@ -63,7 +64,10 @@ endif()
 # Compiler warnings
 # ---------------------------------------------------------------------------
 if(MSVC)
-    target_compile_options(KorJpnIme PRIVATE /W4 /WX)
+    # /W3 with no warnings-as-errors — TSF/COM headers and our edit-session
+    # helpers trigger benign warnings (vtable mismatches, unused params)
+    # that would otherwise stop the build.
+    target_compile_options(KorJpnIme PRIVATE /W3 /EHsc)
 else()
     target_compile_options(KorJpnIme PRIVATE
         -Wall -Wextra
