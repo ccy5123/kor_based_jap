@@ -6,6 +6,8 @@ syllables (와타시노, 갓코우, 한바아가아…) and KorJpnIme converts t
 to Japanese kana, then offers kanji candidates with a Mozc-quality
 viterbi-based segmentation engine.
 
+> 🌏 Languages: **English** · [한국어](README.ko.md) · [日本語](README.ja.md)
+
 ```
 와타시  +  Space   →   私 / 渡し / 渡 / ワタシ / わたし
 와타시노 + Space   →   私の / 渡しの / わたしの / ワタシノ
