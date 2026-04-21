@@ -353,6 +353,49 @@ void HangulComposer::reset() {
     _rawJong = 0;
 }
 
+// Drop the most recently added piece of the in-progress syllable.  Order of
+// undo (the reverse of typing order):
+//   1. Compound jong → simplify to its first part (ㄳ→ㄱ, ㄵ→ㄴ, …)
+//   2. Single jong   → remove
+//   3. Compound vowel → simplify to first part (ㅘ→ㅗ, ㅝ→ㅜ, …)
+//   4. Jung (vowel)  → remove
+//   5. Cho (consonant) → remove (composer becomes empty)
+// Returns true if anything was undone.
+bool HangulComposer::undoLastJamo() {
+    if (_jong >= 0) {
+        // Try simplify compound jong first
+        batchim::SplitJong sj = batchim::splitCompoundJong(_jong);
+        if (sj.firstJong >= 0) {
+            _jong    = sj.firstJong;
+            _rawJong = kJong[_jong];
+        } else {
+            _jong    = -1;
+            _rawJong = 0;
+        }
+        return true;
+    }
+    if (_jung >= 0) {
+        // Try simplify compound vowel (ㅘ → ㅗ etc.) by reverse-lookup of kVowelCompound
+        if (_rawJung != 0) {
+            for (const auto& vp : kVowelCompound) {
+                if (vp.result == _rawJung) {
+                    _jung    = jungIndex(vp.v1);
+                    _rawJung = vp.v1;
+                    return _jung >= 0;
+                }
+            }
+        }
+        _jung    = -1;
+        _rawJung = 0;
+        return true;
+    }
+    if (_cho >= 0) {
+        _cho = -1;
+        return true;
+    }
+    return false;
+}
+
 // ============================================================================
 // KeyHandler — ITfKeyEventSink
 // ============================================================================
@@ -486,6 +529,15 @@ STDMETHODIMP KeyHandler::OnTestKeyDown(ITfContext *pCtx, WPARAM wParam,
         *pfEaten = TRUE; return S_OK;
     }
 
+    // Digits and ASCII punctuation are converted to full-width while the IME
+    // is on (handled in OnKeyDown).  Eat them here so TSF doesn't pass through.
+    if ((vk >= '0' && vk <= '9')
+     || vk == VK_OEM_1 || vk == VK_OEM_2 || vk == VK_OEM_3
+     || vk == VK_OEM_4 || vk == VK_OEM_5 || vk == VK_OEM_6
+     || vk == VK_OEM_7 || vk == VK_OEM_PLUS) {
+        *pfEaten = TRUE; return S_OK;
+    }
+
     // F6 (→ hiragana) / F7 (→ katakana): eat only when composing
     if ((vk == VK_F6 || vk == VK_F7) && composing) {
         *pfEaten = TRUE;
@@ -544,68 +596,142 @@ static bool FlushAndCommit(KorJpnIme *pIme, HangulComposer& composer, ITfContext
     return true;
 }
 
-// Try to start kanji conversion: lookup _pendingKana in the dictionary, and
-// if there are candidates, show the candidate window and switch to conversion
-// mode.  Returns true if conversion started; false if there's nothing to
-// convert (caller should fall back to plain commit).
-//
-// Candidates are merged from two sources, in priority order:
-//   1. UserDict::GetPreferred (user-learned picks, sorted by usage count desc)
-//   2. Dictionary::Lookup     (mecab-ipadic, sorted by intrinsic frequency)
-//   3. The raw kana itself (always last fallback, so the user can type words
-//      that have no dictionary entry and still commit them as hiragana).
-// Duplicates are dropped while preserving the user-preferred entries' priority.
+// Try to start kanji conversion.  Strategy:
+//   1. Flush any in-progress syllable into _pendingKana.
+//   2. For EACH valid prefix length (longest to shortest), gather candidates
+//      from UserDict + Dictionary.
+//   3. Order the prefix groups so the most "useful" group comes first.  We
+//      use a heuristic: sort by candidate count descending (a prefix with
+//      many entries is likely a common word), with prefix length descending
+//      as a tiebreaker.  This avoids the "rare proper noun beats common
+//      short word" problem (e.g. わたしの→渡志野 hiding わたし→私).
+//   4. Take top N candidates from each group, dedup across groups (keep the
+//      first occurrence so longer prefixes win on identical kanji).
+//   5. Always include the FULL pending as a final raw-kana fallback.
+//   6. Enter conversion mode passing the parallel (candidate, prefix) arrays
+//      so the commit step knows exactly how much pending to consume.
 static bool TryStartConversion(KorJpnIme *pIme, HangulComposer& composer, ITfContext *pCtx) {
-    // Flush any in-progress syllable into pending so the lookup uses the full word.
     std::wstring tail = composer.flush();
     if (!tail.empty()) AppendKanaFor(pIme, tail[0], 0);
 
     const std::wstring pending = pIme->PendingKana();
     if (pending.empty()) return false;
 
-    std::vector<std::wstring> candidates;
-    auto pushUnique = [&](const std::wstring& s) {
-        if (s.empty()) return;
-        if (std::find(candidates.begin(), candidates.end(), s) != candidates.end())
-            return;
-        candidates.push_back(s);
+    const Dictionary *dict  = pIme->GetDictionary();
+    const UserDict&   udict = pIme->GetUserDict();
+
+    auto candidatesFor = [&](const std::wstring& key) {
+        std::vector<std::wstring> v;
+        auto pushU = [&](const std::wstring& s) {
+            if (s.empty()) return;
+            if (std::find(v.begin(), v.end(), s) != v.end()) return;
+            v.push_back(s);
+        };
+        for (auto& k : udict.GetPreferred(key)) pushU(k);
+        if (dict) for (auto& k : dict->Lookup(key)) pushU(k);
+        return v;
     };
 
-    // 1. user-learned (highest priority)
-    for (auto& kanji : pIme->GetUserDict().GetPreferred(pending)) {
-        pushUnique(kanji);
+    // Gather (prefix, candidates) for every prefix length that has anything
+    struct PrefixGroup { std::wstring prefix; std::vector<std::wstring> cands; };
+    std::vector<PrefixGroup> groups;
+    for (size_t len = pending.size(); len > 0; --len) {
+        std::wstring prefix = pending.substr(0, len);
+        auto v = candidatesFor(prefix);
+        if (!v.empty()) groups.push_back({std::move(prefix), std::move(v)});
     }
-    // 2. system dictionary
-    if (const Dictionary *dict = pIme->GetDictionary()) {
-        for (auto& kanji : dict->Lookup(pending)) {
-            pushUnique(kanji);
+
+    // Order: more candidates first (= more common word), longer prefix on tie.
+    std::sort(groups.begin(), groups.end(),
+        [](const PrefixGroup& a, const PrefixGroup& b) {
+            if (a.cands.size() != b.cands.size())
+                return a.cands.size() > b.cands.size();
+            return a.prefix.size() > b.prefix.size();
+        });
+
+    constexpr int kPerGroupLimit = 5;
+    constexpr int kTotalLimit    = 30;
+
+    std::vector<std::wstring> outCands, outPrefixes;
+    auto pushUniqueWithPrefix = [&](const std::wstring& kanji, const std::wstring& prefix) {
+        if (kanji.empty()) return;
+        for (auto& c : outCands) if (c == kanji) return;
+        outCands.push_back(kanji);
+        outPrefixes.push_back(prefix);
+    };
+
+    // ----- Step A: 2-segment composed candidates (head kanji + tail kana) ----
+    // Lightweight stand-in for sentence segmentation: for every prefix shorter
+    // than `pending` that has dictionary candidates, build "<top_kanji><rest_kana>".
+    // Example: わたしの → わたし(私) + remainder の → "私の".  Committing
+    // any of these consumes the full pending so the remainder doesn't linger.
+    for (auto& g : groups) {
+        if ((int)outCands.size() >= kTotalLimit) break;
+        if (g.prefix.size() == pending.size()) continue;  // would just duplicate single
+        if (g.cands.empty()) continue;
+        std::wstring rest = pending.substr(g.prefix.size());
+        // Take top 2 kanji of this prefix, combine with the rest as raw kana
+        int taken = 0;
+        for (auto& k : g.cands) {
+            if (taken >= 2) break;
+            pushUniqueWithPrefix(k + rest, pending);
+            ++taken;
         }
     }
-    // 3. raw kana fallback
-    pushUnique(pending);
 
-    if (candidates.empty()) return false;
-    pIme->EnterConversion(candidates, pCtx);
+    // ----- Step B: single-prefix candidates --------------------------------
+    for (auto& g : groups) {
+        if ((int)outCands.size() >= kTotalLimit) break;
+        int added = 0;
+        for (auto& k : g.cands) {
+            if (added >= kPerGroupLimit) break;
+            if ((int)outCands.size() >= kTotalLimit) break;
+            size_t before = outCands.size();
+            pushUniqueWithPrefix(k, g.prefix);
+            if (outCands.size() > before) ++added;
+        }
+        // Raw prefix as fallback for this group
+        if (added > 0 && (int)outCands.size() < kTotalLimit) {
+            pushUniqueWithPrefix(g.prefix, g.prefix);
+        }
+    }
+
+    // Always offer the full pending as the very last raw fallback.
+    pushUniqueWithPrefix(pending, pending);
+
+    if (outCands.empty()) return false;
+    pIme->EnterConversion(outCands, outPrefixes, pCtx);
     return true;
 }
 
-// Commit the currently selected candidate from the candidate window, learn it,
-// clear the pending buffer, and exit conversion mode.
+// Commit the currently-selected candidate, learn it, drop ONLY that
+// candidate's prefix from pending (so any unmatched suffix stays as preedit
+// for the next conversion round), and exit conversion mode.
 static void CommitSelectedCandidate(KorJpnIme *pIme, ITfContext *pCtx) {
-    std::wstring sel = pIme->GetCandidateWindow().GetSelected();
-    std::wstring kana = pIme->PendingKana();   // capture before ClearPending
+    std::wstring sel    = pIme->GetCandidateWindow().GetSelected();
+    std::wstring prefix = pIme->SelectedPrefix();      // per-candidate prefix
+    std::wstring fullPending = pIme->PendingKana();
+
     if (!sel.empty()) {
         pIme->CommitText(pCtx, sel);
-        // Only record if the user picked something different from the raw kana,
-        // i.e. an actual conversion (avoid polluting the user dict with
-        // identity entries like かんじ→かんじ).
-        if (sel != kana) {
-            pIme->GetUserDict().Record(kana, sel);
-        }
+        if (sel != prefix) pIme->GetUserDict().Record(prefix, sel);
     }
+
+    std::wstring remaining;
+    if (fullPending.size() >= prefix.size()
+     && fullPending.compare(0, prefix.size(), prefix) == 0) {
+        remaining = fullPending.substr(prefix.size());
+    }
+
     pIme->ClearPending();
-    pIme->UpdatePreedit(pCtx, L"");
     pIme->ExitConversion();
+
+    if (remaining.empty()) {
+        pIme->UpdatePreedit(pCtx, L"");
+    } else {
+        pIme->AppendKana(remaining);
+        pIme->UpdatePreedit(pCtx, remaining);
+    }
 }
 
 // @MX:ANCHOR: OnKeyDown is the main dispatch for all Korean key processing
@@ -786,11 +912,14 @@ STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
         return S_OK;
     }
 
-    // Backspace — first try to peel a jamo off the in-progress syllable; if
-    // the composer is already empty, peel the last codepoint off pending kana.
+    // Backspace — undo strategy:
+    //   1. If the composer has an in-progress syllable, peel ONE jamo off it
+    //      (per-jamo undo, including simplifying compound jongs / vowels).
+    //   2. Otherwise, if there's pending kana, drop the last kana codepoint.
+    //   3. Otherwise, pass through so the host app can delete characters.
     if (vk == VK_BACK) {
         if (!_composer.empty()) {
-            _composer.reset();          // (TODO: per-jamo undo; reset clears whole syllable)
+            _composer.undoLastJamo();
             _pIme->UpdatePreedit(pCtx, BuildPreedit(_pIme, _composer));
             *pfEaten = TRUE;
             return S_OK;
@@ -819,8 +948,6 @@ STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
     }
 
     // Japanese punctuation — , → 、  and  . → 。
-    // Behave like a normal jamo input: flush in-progress syllable, append the
-    // punctuation to the pending kana so the user can keep building a phrase.
     if (vk == VK_OEM_COMMA || vk == VK_OEM_PERIOD) {
         std::wstring tail = _composer.flush();
         if (!tail.empty()) AppendKanaFor(_pIme, tail[0], 0);
@@ -828,6 +955,61 @@ STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
         _pIme->UpdatePreedit(pCtx, BuildPreedit(_pIme, _composer));
         *pfEaten = TRUE;
         return S_OK;
+    }
+
+    // Digits and ASCII symbols → full-width (zenkaku) equivalents while the
+    // IME is on.  Standard JP-IME convention: 1 → １, ! → ！, ? → ？, etc.
+    // Plain WM_CHAR mapping for VK 0x30-0x39 (digits) and OEM punctuation.
+    {
+        wchar_t zen = 0;
+        if (vk >= '0' && vk <= '9' && !shifted) {
+            zen = static_cast<wchar_t>(0xFF10 + (vk - '0'));   // 0xFF10 = '０'
+        } else {
+            // Common ASCII punctuation → zenkaku
+            // Each entry maps a (shifted, vk) pair to its full-width char.
+            struct Punc { bool shifted; UINT vk; wchar_t zen; };
+            static constexpr Punc kPunc[] = {
+                // unshifted symbols on a US keyboard
+                { false, VK_OEM_1,         L'\uFF1B' }, // ;  → ；
+                { false, VK_OEM_2,         L'\uFF0F' }, // /  → ／
+                { false, VK_OEM_3,         L'\uFF40' }, // `  → ｀
+                { false, VK_OEM_4,         L'\uFF3B' }, // [  → ［
+                { false, VK_OEM_5,         L'\uFFE5' }, // \  → ¥ (Japanese yen sign)
+                { false, VK_OEM_6,         L'\uFF3D' }, // ]  → ］
+                { false, VK_OEM_7,         L'\uFF07' }, // '  → ＇
+                { false, VK_OEM_PLUS,      L'\uFF1D' }, // =  → ＝
+                // shifted symbols
+                { true,  '1',              L'\uFF01' }, // !  → ！
+                { true,  '2',              L'\uFF20' }, // @  → ＠
+                { true,  '3',              L'\uFF03' }, // #  → ＃
+                { true,  '4',              L'\uFF04' }, // $  → ＄
+                { true,  '5',              L'\uFF05' }, // %  → ％
+                { true,  '6',              L'\uFF3E' }, // ^  → ＾
+                { true,  '7',              L'\uFF06' }, // &  → ＆
+                { true,  '8',              L'\uFF0A' }, // *  → ＊
+                { true,  '9',              L'\uFF08' }, // (  → （
+                { true,  '0',              L'\uFF09' }, // )  → ）
+                { true,  VK_OEM_1,         L'\uFF1A' }, // :  → ：
+                { true,  VK_OEM_2,         L'\uFF1F' }, // ?  → ？
+                { true,  VK_OEM_3,         L'\uFF5E' }, // ~  → ～
+                { true,  VK_OEM_4,         L'\uFF5B' }, // {  → ｛
+                { true,  VK_OEM_5,         L'\uFF5C' }, // |  → ｜
+                { true,  VK_OEM_6,         L'\uFF5D' }, // }  → ｝
+                { true,  VK_OEM_7,         L'\uFF02' }, // "  → ＂
+                { true,  VK_OEM_PLUS,      L'\uFF0B' }, // +  → ＋
+            };
+            for (const auto& p : kPunc) {
+                if (p.vk == vk && p.shifted == shifted) { zen = p.zen; break; }
+            }
+        }
+        if (zen != 0) {
+            std::wstring tail = _composer.flush();
+            if (!tail.empty()) AppendKanaFor(_pIme, tail[0], 0);
+            _pIme->AppendKana(std::wstring(1, zen));
+            _pIme->UpdatePreedit(pCtx, BuildPreedit(_pIme, _composer));
+            *pfEaten = TRUE;
+            return S_OK;
+        }
     }
 
     // ---- Korean jamo input ------------------------------------------------

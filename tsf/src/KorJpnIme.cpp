@@ -119,9 +119,11 @@ HRESULT KorJpnIme::UpdatePreedit(ITfContext *pCtx, const std::wstring& text) {
 
 // ----- Conversion mode lifecycle -------------------------------------------
 void KorJpnIme::EnterConversion(const std::vector<std::wstring>& candidates,
+                                 const std::vector<std::wstring>& candidatePrefixes,
                                  ITfContext *pCtx) {
     if (_convCtx) { _convCtx->Release(); _convCtx = nullptr; }
     if (pCtx) { pCtx->AddRef(); _convCtx = pCtx; }
+    _candidatePrefixes = candidatePrefixes;
     _inConversion = true;
     _candidateWindow.Show(candidates,
                           _hasCaretRect ? &_caretRect : nullptr);
@@ -131,6 +133,16 @@ void KorJpnIme::ExitConversion() {
     _inConversion = false;
     _candidateWindow.Hide();
     if (_convCtx) { _convCtx->Release(); _convCtx = nullptr; }
+    _candidatePrefixes.clear();
+}
+
+std::wstring KorJpnIme::PrefixOf(int idx) const {
+    if (idx < 0 || idx >= (int)_candidatePrefixes.size()) return {};
+    return _candidatePrefixes[idx];
+}
+
+std::wstring KorJpnIme::SelectedPrefix() const {
+    return PrefixOf(_candidateWindow.GetSelectedIndex());
 }
 
 void KorJpnIme::OnCandidateClicked(int idx) {
@@ -138,15 +150,30 @@ void KorJpnIme::OnCandidateClicked(int idx) {
     if (idx < 0 || idx >= _candidateWindow.Count()) return;
     _candidateWindow.SetSelectedIndex(idx);
 
-    std::wstring sel  = _candidateWindow.GetSelected();
-    std::wstring kana = _pendingKana;   // capture before ClearPending
+    const std::wstring sel    = _candidateWindow.GetSelected();
+    const std::wstring prefix = PrefixOf(idx);     // captured before ExitConversion
+    ITfContext *pCtxLocal     = _convCtx;          // ExitConversion will null it
+
     if (!sel.empty()) {
-        CommitText(_convCtx, sel);
-        if (sel != kana) _userDict.Record(kana, sel);
+        CommitText(pCtxLocal, sel);
+        if (sel != prefix) _userDict.Record(prefix, sel);
     }
-    ClearPending();
-    UpdatePreedit(_convCtx, L"");
+
+    // Drop only this candidate's prefix from pending; the rest stays as preedit
+    // so the user can keep converting one segment at a time.
+    if (_pendingKana.size() >= prefix.size()
+     && _pendingKana.compare(0, prefix.size(), prefix) == 0) {
+        _pendingKana.erase(0, prefix.size());
+    } else {
+        _pendingKana.clear();
+    }
     ExitConversion();
+
+    if (_pendingKana.empty()) {
+        UpdatePreedit(pCtxLocal, L"");
+    } else {
+        UpdatePreedit(pCtxLocal, _pendingKana);
+    }
 }
 
 // ----------------------------------------------------------------------------

@@ -20,6 +20,11 @@ public:
     bool empty() const;
     void reset();
 
+    // Per-jamo backspace: drops the most recently added piece of state — a
+    // compound jong (ㄳ → ㄱ), a compound vowel (ㅘ → ㅗ), the jong, the jung,
+    // or finally the cho.  Returns true if anything was actually undone.
+    bool undoLastJamo();
+
 private:
     // Indexes into the Hangul Unicode tables
     static constexpr int CHO_COUNT  = 19;

@@ -63,14 +63,25 @@ public:
     bool IsInConversion() const { return _inConversion; }
     CandidateWindow& GetCandidateWindow() { return _candidateWindow; }
 
-    // EnterConversion remembers the active context (AddRef'd) so that mouse
-    // clicks on the candidate window — which arrive outside the OnKeyDown
-    // call — can still commit text via OnCandidateClicked().
+    // EnterConversion remembers
+    //   - the active context (AddRef'd) so mouse-triggered commits can fire
+    //     outside the original OnKeyDown call;
+    //   - a parallel array of the kana PREFIX each candidate corresponds to.
+    //     When the user commits a candidate, only that candidate's prefix is
+    //     consumed from _pendingKana — anything after the prefix stays as
+    //     preedit so the user can keep converting one segment at a time.
     void EnterConversion(const std::vector<std::wstring>& candidates,
+                         const std::vector<std::wstring>& candidatePrefixes,
                          ITfContext *pCtx);
     void ExitConversion();
 
+    // The kana prefix that the currently-selected candidate would consume on
+    // commit.  Empty before EnterConversion is called.
+    std::wstring SelectedPrefix() const;
+    std::wstring PrefixOf(int candidateIdx) const;
+
     // Called by CandidateWindow when the user picks a candidate with the mouse.
+    // Invokes the same commit + learn + remaining-kana logic as the keyboard path.
     void OnCandidateClicked(int idx);
 
     // Caret rect (screen coordinates of the preedit text), updated by
@@ -104,5 +115,6 @@ private:
 
     RECT            _caretRect = {};  // screen coords of last known preedit
     bool            _hasCaretRect = false;
-    ITfContext     *_convCtx = nullptr;  // AddRef'd while in conversion mode
+    ITfContext     *_convCtx = nullptr;        // AddRef'd while in conversion mode
+    std::vector<std::wstring> _candidatePrefixes;   // parallel to candidates list
 };
