@@ -1,0 +1,45 @@
+# Build outputs
+*.dll
+*.pdb
+*.lib
+*.exp
+*.obj
+*.o
+*.a
+*.so
+*.dylib
+
+# Build directories
+build/
+build_*/
+*.build/
+cmake-build-*/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.user
+*.suo
+*.ncb
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / debug
+*.log
+debug.log
+/c/KorJpnIme*/
+*_test.log
+
+# Personal
+.claude/
+CLAUDE.md

@@ -1,0 +1,38 @@
+# Batchim (final consonant) handling rules
+
+# 발음 ん: 받침이 ㄴ/ㅇ/ㅁ -> ん
+hatsuon:
+  - ㄴ
+  - ㅇ
+  - ㅁ
+
+# 촉음 っ: 자음군 엄격 매칭 (배치다음 초성과 family 일치)
+sokuon_strict:
+  ㄱ: [ㄱ, ㅋ]
+  ㅂ: [ㅂ, ㅍ]
+  ㄷ: [ㄷ, ㅌ]
+  ㅅ: [ㅅ, ㅈ, ㅊ]
+
+# 촉음 만능 마커: ㅅ받침은 모든 자음 초성에 대해 っ 트리거 (모음 초성 ㅇ 제외)
+sokuon_universal_markers:
+  - ㅅ
+  - ㅆ
+
+# 항상 촉음으로 처리 (다음 음절과 무관)
+sokuon_always:
+  - ㅎ
+
+# 단어 끝(다음 음절 없음)일 때만 촉음 처리
+sokuon_terminal:
+  - ㅅ
+  - ㅆ
+
+# 외래어 표기법 fallback: 받침 자음을 가나로 흡수
+# 우선순위는 hatsuon > sokuon > foreign_batchim
+foreign_batchim:
+  ㄹ: る
+  ㅂ: ぷ
+  ㄱ: く
+  ㅍ: ぷ
+  ㅋ: く
+  ㅌ: と

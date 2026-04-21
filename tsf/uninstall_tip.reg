@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+; Korean-Japanese IME — remove TSF TIP profile.
+; Use BEFORE `regsvr32 /u KorJpnIme.dll`.
+
+[-HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\CTF\TIP\{CADA0001-1234-5678-90AB-CDEF00000001}]
