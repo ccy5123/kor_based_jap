@@ -17,6 +17,7 @@ constexpr int    kFontHeight    = 16;
 constexpr int    kFallbackX     = 100;
 constexpr int    kFallbackY     = 100;
 constexpr int    kMinWidth      = 220;
+constexpr int    kHeaderHeight  = 18;     // height of the katakana-mode badge bar
 
 bool g_classRegistered = false;
 
@@ -25,6 +26,13 @@ bool g_classRegistered = false;
 CandidateWindow::~CandidateWindow() {
     if (_hWnd)  DestroyWindow(_hWnd);
     if (_hFont) DeleteObject(_hFont);
+}
+
+// Header bar height -- only reserved while katakana mode is on.  Returning 0
+// in normal mode keeps the window the same size it has always been so we
+// don't add visual noise to the common case.
+int CandidateWindow::HeaderHeight() const {
+    return (_pIme && _pIme->IsKatakanaMode()) ? kHeaderHeight : 0;
 }
 
 bool CandidateWindow::EnsureRegistered() {
@@ -81,11 +89,12 @@ void CandidateWindow::Show(const std::vector<std::wstring>& candidates,
 
     if (!EnsureWindow()) return;
 
-    // Window height = padding + visible rows + (optional) page-footer line + padding
+    // Window height = padding + (optional katakana header) + visible rows
+    //                 + (optional page-footer line) + padding
     int rows = std::min<int>(Count(), RowsPerView());
     if (rows <= 0) rows = 1;
     int extraFooter = (!_expanded && PageCount() > 1) ? kLineHeight : 0;
-    int height = kPaddingY * 2 + kLineHeight * rows + extraFooter;
+    int height = kPaddingY * 2 + HeaderHeight() + kLineHeight * rows + extraFooter;
 
     if (caretRect) {
         _lastCaretRect      = *caretRect;
@@ -109,7 +118,7 @@ void CandidateWindow::SetExpanded(bool on) {
     int rows = std::min<int>(Count(), RowsPerView());
     if (rows <= 0) rows = 1;
     int extraFooter = (!_expanded && PageCount() > 1) ? kLineHeight : 0;
-    int height = kPaddingY * 2 + kLineHeight * rows + extraFooter;
+    int height = kPaddingY * 2 + HeaderHeight() + kLineHeight * rows + extraFooter;
 
     // If we know the caret rect, recompute position so the (now taller) window
     // stays inside the work area — flips to above-caret when there's no room
@@ -251,6 +260,21 @@ void CandidateWindow::OnPaint(HDC hdc) {
     if (_hFont) oldFont = static_cast<HFONT>(SelectObject(hdc, _hFont));
     SetBkMode(hdc, TRANSPARENT);
 
+    // Katakana-mode badge bar across the top.  Drawn first so the candidate
+    // rows below paint on the normal window background.  The header is
+    // outside the click hit-test so accidental clicks on it are ignored.
+    int headerH = HeaderHeight();
+    if (headerH > 0) {
+        RECT head = { rc.left, 0, rc.right, headerH };
+        HBRUSH headBg = CreateSolidBrush(RGB(40, 70, 130));   // muted blue
+        FillRect(hdc, &head, headBg);
+        DeleteObject(headBg);
+        SetTextColor(hdc, RGB(255, 255, 255));
+        // L"カナ" (KATAKANA KA + KATAKANA NA) -- short and unambiguous.
+        const wchar_t *label = L"\u30AB\u30CA  (RAlt+K)";
+        TextOutW(hdc, kPaddingX, 1, label, static_cast<int>(wcslen(label)));
+    }
+
     // Determine the visible window into _candidates.
     // - Compact mode: show one PageSize() block; numeric prefix is the page-local slot (1-9).
     // - Expanded mode: scroll so the selected row stays visible; show kExpandedRows;
@@ -271,7 +295,7 @@ void CandidateWindow::OnPaint(HDC hdc) {
     }
     int viewEnd = std::min<int>(viewStart + viewRows, Count());
 
-    int y = kPaddingY;
+    int y = kPaddingY + headerH;
     for (int i = viewStart; i < viewEnd; ++i) {
         const bool selected = (i == _selectedIdx);
         const int  slot     = i - viewStart;       // 0-based within visible block
@@ -333,7 +357,13 @@ LRESULT CALLBACK CandidateWindow::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LP
         case WM_LBUTTONDOWN: {
             if (!self || self->Count() == 0) return 0;
             int yClient = GET_Y_LPARAM(lParam);
-            int row = (yClient - kPaddingY) / kLineHeight;
+            // Account for the optional katakana header bar -- without this
+            // subtraction every row would be misindexed by one slot whenever
+            // katakana mode is on (and clicking inside the header would
+            // commit the wrong candidate).
+            int rowY = yClient - kPaddingY - self->HeaderHeight();
+            if (rowY < 0) return 0;            // click on the header itself
+            int row = rowY / kLineHeight;
             // Same view-window calculation as OnPaint
             int viewStart;
             int viewRows = self->RowsPerView();

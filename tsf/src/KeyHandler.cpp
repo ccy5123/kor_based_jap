@@ -565,6 +565,12 @@ static void AppendKanaFor(KorJpnIme *pIme, wchar_t ch, wchar_t nextJamo) {
 
 // Build the visible preedit string: pending_kana + (current_in-progress syllable
 // rendered as kana when possible, otherwise raw Korean jamo).
+//
+// When persistent katakana mode is active (RAlt+K), prepend a small triangle
+// marker so the user has a visible cue even when the underlying kana
+// characters look ambiguous (some shapes are nearly identical between
+// hiragana and katakana, e.g. へ vs ヘ).  The marker is decorative only --
+// it never reaches CommitText() because that path uses _pendingKana directly.
 static std::wstring BuildPreedit(KorJpnIme *pIme, HangulComposer& composer) {
     std::wstring pre = pIme->PendingKana();
     std::wstring cur = composer.preedit();
@@ -575,6 +581,12 @@ static std::wstring BuildPreedit(KorJpnIme *pIme, HangulComposer& composer) {
         } else {
             pre += cur;     // bare consonant or vowel jamo
         }
+    }
+    // Only prepend the katakana marker when there is actual content to mark;
+    // an empty preedit must stay empty so the host app's caret/selection
+    // rendering doesn't change while the user isn't composing.
+    if (!pre.empty() && pIme->IsKatakanaMode()) {
+        pre.insert(0, L"\u25B2 ");   // BLACK UP-POINTING TRIANGLE + space
     }
     return pre;
 }
