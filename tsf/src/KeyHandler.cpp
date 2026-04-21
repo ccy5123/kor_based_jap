@@ -3,6 +3,8 @@
 #include "Composition.h"
 #include "BatchimLookup.h"  // includes mapping_table.h + batchim_rules.h
 #include "Dictionary.h"
+#include "RichDictionary.h"
+#include "Viterbi.h"
 #include "CandidateWindow.h"
 #include "KanaConv.h"
 #include "DebugLog.h"
@@ -624,33 +626,37 @@ static bool FlushAndCommit(KorJpnIme *pIme, HangulComposer& composer, ITfContext
     return true;
 }
 
-// Try to start kanji conversion.  Strategy:
-//   1. Flush any in-progress syllable into _pendingKana.
-//   2. Find the LONGEST prefix of _pendingKana that has any dictionary
-//      candidates (UserDict first, then system Dictionary).  If nothing
-//      matches at any prefix length, fall back to the full pending string
-//      committed raw as hiragana.
-//   3. Build the candidate list for THAT prefix:
-//        a. user-learned picks (UserDict.GetPreferred, sorted by usage count
-//           desc — this is what makes the IME "remember" your choices)
-//        b. system dictionary entries (Mozc OSS data, intrinsic cost order)
-//        c. the raw matched prefix as kana (fallback)
-//        d. katakana of the matched prefix (auto-katakana, always)
-//      Dedup while preserving order so user picks bubble to the top.
-//   4. When the matched prefix is shorter than the full pending (the
-//      loanword case — dict couldn't find the whole word, e.g.
-//      はんばーがー), also append full pending hiragana + full pending
-//      katakana with the FULL pending as their prefix.  These let the
-//      user commit the entire typed string in one shot via the candidate
-//      window without having to flip a mode toggle.
-//   5. Per-candidate prefixes are stored in `prefixes` parallel to `cands`;
-//      anything after the chosen candidate's prefix in _pendingKana stays
-//      as preedit after commit so the user can convert the rest as the
-//      next segment.
+// Try to start kanji conversion.  Strategy (viterbi-first with legacy
+// fallback):
 //
-// (No multi-prefix gathering, no 2-segment composition — those were tried
-// previously and disrupted both the user-learning ordering and obvious
-// candidate visibility.)
+//   1. Flush any in-progress syllable into _pendingKana.
+//
+//   2. If the viterbi engine is loaded (kj_dict.bin + kj_conn.bin present),
+//      run a 1-best segmentation over the full pending string.  The result
+//      gives us:
+//        - the recommended FIRST-SEGMENT length (e.g. for わたしの it picks
+//          わたし -> 私 + の -> の, so the first segment is わたし)
+//        - a JOINED surface for the whole pending (e.g. "私の") that the
+//          user can commit in one shot
+//
+//      Otherwise (viterbi engine not loaded) fall back to the legacy
+//      longest-prefix lookup over the text Dictionary.
+//
+//   3. Build the candidate list:
+//        a. viterbi joined surface (top, consumes ALL pending) -- only
+//           when there are 2+ real segments
+//        b. user-learned picks for the first segment (UserDict.GetPreferred)
+//        c. RichDictionary entries for the first segment (cost-sorted)
+//        d. legacy Dictionary entries for the first segment (catches
+//           anything RichDictionary missed)
+//        e. raw first-segment kana (fallback)
+//        f. katakana of first-segment kana (auto-katakana)
+//        g. full pending hiragana + katakana when matched < pending
+//           (loanword fallback so ハンバーガー still works for OOV input)
+//
+//   4. Per-candidate prefixes parallel to `cands`; picking a candidate
+//      consumes its prefix and leaves the rest of pending as preedit for
+//      the next round.
 static bool TryStartConversion(KorJpnIme *pIme, HangulComposer& composer, ITfContext *pCtx) {
     std::wstring tail = composer.flush();
     if (!tail.empty()) AppendKanaFor(pIme, tail[0], 0);
@@ -658,63 +664,13 @@ static bool TryStartConversion(KorJpnIme *pIme, HangulComposer& composer, ITfCon
     const std::wstring pending = pIme->PendingKana();
     if (pending.empty()) return false;
 
-    const Dictionary *dict  = pIme->GetDictionary();
-    const UserDict&   udict = pIme->GetUserDict();
+    const Dictionary     *dict     = pIme->GetDictionary();
+    const RichDictionary &rich     = pIme->GetRichDictionary();
+    const Connector      &conn     = pIme->GetConnector();
+    const UserDict       &udict    = pIme->GetUserDict();
 
-    auto candidatesFor = [&](const std::wstring& key) {
-        std::vector<std::wstring> v;
-        auto pushU = [&](const std::wstring& s) {
-            if (s.empty()) return;
-            if (std::find(v.begin(), v.end(), s) != v.end()) return;
-            v.push_back(s);
-        };
-        for (auto& k : udict.GetPreferred(key)) pushU(k);     // user-learned first
-        if (dict) for (auto& k : dict->Lookup(key)) pushU(k); // system dict
-        return v;
-    };
-
-    // Find the LONGEST prefix that has any candidates.
-    std::wstring matched;
     std::vector<std::wstring> cands;
-    for (size_t len = pending.size(); len > 0; --len) {
-        std::wstring prefix = pending.substr(0, len);
-        auto v = candidatesFor(prefix);
-        if (!v.empty()) {
-            matched = std::move(prefix);
-            cands   = std::move(v);
-            break;
-        }
-    }
-    if (matched.empty()) {
-        // No prefix had any dict entries — let the user commit the whole
-        // pending as raw kana via the candidate window's fallback.
-        matched = pending;
-    }
-
-    // Always include the raw matched kana at the end as a fallback.
-    if (std::find(cands.begin(), cands.end(), matched) == cands.end()) {
-        cands.push_back(matched);
-    }
-    if (cands.empty()) return false;
-
-    // Every kanji/dict candidate so far consumes the matched prefix.
-    std::vector<std::wstring> prefixes(cands.size(), matched);
-
-    // ---- Auto-katakana suggestions ---------------------------------------
-    // The dict builder strips pure-kana surfaces, so loanwords like
-    // ハンバーガー never reach the candidate list through the normal lookup
-    // path.  Synthesize them here so the user always has a katakana option
-    // without needing a mode toggle.
-    //
-    // Two layers:
-    //   (a) katakana of the matched prefix -- always offered, sits next to
-    //       the raw-hiragana fallback (so わたし also gets ワタシ in the list).
-    //   (b) full pending hiragana + katakana -- only when the longest dict
-    //       prefix is shorter than what the user actually typed.  This is
-    //       the loanword case (e.g. はんばーがー matches only は in the
-    //       dict, leaving んばーがー stranded).  These carry the FULL
-    //       pending as their prefix so picking them consumes everything in
-    //       one commit.
+    std::vector<std::wstring> prefixes;
     auto addCandidate = [&](const std::wstring& s, const std::wstring& prefix) {
         if (s.empty()) return;
         if (std::find(cands.begin(), cands.end(), s) != cands.end()) return;
@@ -722,13 +678,86 @@ static bool TryStartConversion(KorJpnIme *pIme, HangulComposer& composer, ITfCon
         prefixes.push_back(prefix);
     };
 
-    addCandidate(kana::toKatakanaStr(matched), matched);
+    std::wstring matched;
 
+    // ---- Viterbi path ---------------------------------------------------
+    Viterbi viterbi(rich, conn);
+    Viterbi::Result vrs;
+    if (viterbi.IsReady()) {
+        vrs = viterbi.Best(pending);
+    }
+
+    if (!vrs.empty()) {
+        // First-segment span comes from viterbi's segmentation choice.
+        const auto& first = vrs.segments.front();
+        matched = pending.substr(first.kanaStart, first.kanaLen);
+
+        // (a) Joined surface across ALL segments -- top candidate when
+        // there is more than one segment AND at least one segment is a
+        // real dictionary hit (otherwise the joined surface is just the
+        // raw kana, which is already covered by the fallback below).
+        if (vrs.segments.size() >= 2) {
+            bool anyReal = false;
+            for (const auto& s : vrs.segments) if (!s.isUnknown) { anyReal = true; break; }
+            if (anyReal) {
+                addCandidate(vrs.joinedSurface(), pending);
+            }
+        }
+
+        // (b) User-learned picks for the matched prefix
+        for (auto& k : udict.GetPreferred(matched)) addCandidate(k, matched);
+
+        // (c) RichDictionary surfaces for the matched prefix (cost-sorted)
+        for (auto& e : rich.Lookup(matched)) addCandidate(e.surface, matched);
+
+        // (d) Legacy text dictionary -- usually a subset of (c) but kept
+        // around as a belt-and-braces fallback during the viterbi rollout.
+        if (dict) for (auto& k : dict->Lookup(matched)) addCandidate(k, matched);
+    } else {
+        // ---- Legacy path: longest-prefix lookup -------------------------
+        auto candidatesFor = [&](const std::wstring& key) {
+            std::vector<std::wstring> v;
+            auto pushU = [&](const std::wstring& s) {
+                if (s.empty()) return;
+                if (std::find(v.begin(), v.end(), s) != v.end()) return;
+                v.push_back(s);
+            };
+            for (auto& k : udict.GetPreferred(key)) pushU(k);
+            if (dict) for (auto& k : dict->Lookup(key)) pushU(k);
+            return v;
+        };
+        for (size_t len = pending.size(); len > 0; --len) {
+            std::wstring prefix = pending.substr(0, len);
+            auto v = candidatesFor(prefix);
+            if (!v.empty()) {
+                matched = std::move(prefix);
+                for (auto& k : v) addCandidate(k, matched);
+                break;
+            }
+        }
+        if (matched.empty()) {
+            matched = pending;
+        }
+    }
+
+    // ---- Common tail: raw kana + auto-katakana --------------------------
+    // (e) Raw matched kana as a literal commit option.
+    addCandidate(matched, matched);
+    // (f) Katakana of the matched prefix.  The dict builder strips
+    // pure-kana surfaces, so loanwords like ワタシ never reach the list
+    // through the normal lookup path; synthesize them here.
+    addCandidate(kana::toKatakanaStr(matched), matched);
+    // (g) Full pending hiragana + katakana when the matched prefix is
+    // shorter than what the user typed -- the loanword case (e.g.
+    // はんばーがー matches only は, leaving んばーがー stranded).  These
+    // carry the FULL pending as their prefix so picking them consumes
+    // everything in one commit.
     if (matched.size() < pending.size()) {
         addCandidate(pending, pending);
         addCandidate(kana::toKatakanaStr(pending), pending);
     }
 
+    if (cands.empty()) return false;
     pIme->EnterConversion(cands, prefixes, pCtx);
     return true;
 }

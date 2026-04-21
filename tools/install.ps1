@@ -59,8 +59,11 @@ Write-Host ""
 # ---------- Sanity-check source files --------------------------------------
 # LICENSES.txt is the third-party attribution file (Mozc / NAIST IPAdic /
 # Okinawa Dictionary).  IPAdic terms require it to ship alongside the data.
+# kj_dict.bin / kj_conn.bin are the optional viterbi engine inputs -- the
+# IME runs without them, just with the legacy longest-prefix lookup.
 $required = @('KorJpnIme.dll', 'jpn_dict.txt', 'LICENSES.txt',
               'install_tip.reg', 'uninstall_tip.reg')
+$optional = @('kj_dict.bin', 'kj_conn.bin')
 foreach ($f in $required) {
     $path = Join-Path $SourceDir $f
     if (-not (Test-Path $path)) {
@@ -97,6 +100,20 @@ if (-not (Test-Path $InstallDir)) {
 }
 foreach ($f in $required) {
     $src = Resolve-Source $f
+    $dst = Join-Path $InstallDir $f
+    Copy-Item -Path $src -Destination $dst -Force
+    Write-Ok "  copied $f"
+}
+# Optional files: copy when present, skip silently when missing.  Lets us
+# ship a slim build (without viterbi binaries) on environments where the
+# user has no need for the better engine.
+foreach ($f in $optional) {
+    try {
+        $src = Resolve-Source $f
+    } catch {
+        Write-Host "  (skipped $f -- not found)" -ForegroundColor Gray
+        continue
+    }
     $dst = Join-Path $InstallDir $f
     Copy-Item -Path $src -Destination $dst -Force
     Write-Ok "  copied $f"

@@ -1,4 +1,6 @@
-# Mozc dictionary source TSVs are 58 MB total — re-fetched on demand.
+# Mozc OSS source data files (~95 MB total) -- re-fetched on demand.
 # Run ./fetch.sh to (re)download.  fetch.sh + README.txt are committed.
 dictionary*.txt
 suffix.txt
+connection_single_column.txt
+id.def

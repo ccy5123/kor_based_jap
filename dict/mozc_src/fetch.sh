@@ -9,6 +9,8 @@ files=(
     dictionary04.txt dictionary05.txt dictionary06.txt dictionary07.txt
     dictionary08.txt dictionary09.txt
     suffix.txt
+    connection_single_column.txt
+    id.def
     README.txt
 )
 for f in "${files[@]}"; do
