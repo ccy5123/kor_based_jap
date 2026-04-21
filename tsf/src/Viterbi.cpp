@@ -21,6 +21,15 @@ constexpr uint16_t kUnknownPos = 0;
 // POS id used for the implicit BOS at position 0 and EOS at position N.
 constexpr uint16_t kBosEosPos = 0;
 
+// Hard cap on K to keep per-position memory linear.  10 is plenty for an
+// IME candidate window (we already cap visible candidates at ~30 across
+// all sources).  Larger K mostly returns near-duplicates of the top picks.
+constexpr int kMaxTopK = 10;
+
+// Sentinel to fill INT cells that haven't been touched.  INT_MAX/4 leaves
+// room for additive cost accumulation without overflow.
+constexpr int INF = INT_MAX / 4;
+
 struct Edge {
     size_t       start;       // kana offset (chars)
     size_t       end;         // kana offset (chars), exclusive
@@ -31,26 +40,55 @@ struct Edge {
     bool         isUnknown;
 };
 
-} // namespace
+// One slot in topK[pos].  Identifies a specific path from BOS to pos by
+// pointing to the LAST edge that reached pos and the rank of the
+// predecessor path within topK[edge.start].
+//
+// pathRid is cached so the forward DP doesn't have to walk back to recover
+// it on every bigram lookup.
+struct PathSlot {
+    int      cost;
+    int      edgeEnd;     // == pos for this slot (the edge ends here)
+    int      edgeIdx;     // index into edgesEndingAt[edgeEnd]; -1 = BOS sentinel
+    int      prevRank;    // rank within topK[edge.start] this path used; -1 = BOS
+    uint16_t pathRid;     // rid of the LAST edge on this path (for next-bigram lookup)
+};
 
-Viterbi::Result Viterbi::Best(std::wstring_view kana) const {
-    Result result;
-    if (kana.empty() || !IsReady()) return result;
+// Insert `cand` into a top-K min-heap-by-cost vector.  Keeps `slots`
+// bounded in size; drops the worst entry when full and the new candidate
+// beats it.  `slots` stays sorted by ascending cost so backtracking can
+// index by rank without a final sort step.
+void InsertTopK(std::vector<PathSlot>& slots, const PathSlot& cand, int K) {
+    if ((int)slots.size() < K) {
+        // Find insertion point (sorted ascending by cost).
+        auto it = std::upper_bound(
+            slots.begin(), slots.end(), cand,
+            [](const PathSlot& a, const PathSlot& b) { return a.cost < b.cost; });
+        slots.insert(it, cand);
+        return;
+    }
+    // Full: replace worst entry only if cand is strictly better.
+    if (cand.cost >= slots.back().cost) return;
+    slots.pop_back();
+    auto it = std::upper_bound(
+        slots.begin(), slots.end(), cand,
+        [](const PathSlot& a, const PathSlot& b) { return a.cost < b.cost; });
+    slots.insert(it, cand);
+}
 
+// Build the lattice (edges grouped by end position) for `kana`.  Always
+// includes a length-1 unknown-fallback edge at every start position so
+// the search is well-defined even for OOV input.
+std::vector<std::vector<Edge>> BuildLattice(std::wstring_view kana,
+                                             const RichDictionary& dict) {
     const size_t N = kana.size();
-
-    // ---- Step 1: enumerate edges --------------------------------------
-    // For each start position, look up every prefix length that produces
-    // a dict match.  Plus a length-1 unknown-fallback at every position so
-    // the lattice is always traversable.
     std::vector<std::vector<Edge>> edgesEndingAt(N + 1);
+
     for (size_t i = 0; i < N; ++i) {
-        bool anyMatch = false;
         for (size_t L = 1; i + L <= N; ++L) {
             std::wstring_view sub = kana.substr(i, L);
-            auto entries = _dict.Lookup(sub);
+            auto entries = dict.Lookup(sub);
             if (entries.empty()) continue;
-            anyMatch = true;
             edgesEndingAt[i + L].reserve(edgesEndingAt[i + L].size() + entries.size());
             for (const auto& e : entries) {
                 edgesEndingAt[i + L].push_back(Edge{
@@ -58,81 +96,117 @@ Viterbi::Result Viterbi::Best(std::wstring_view kana) const {
                 });
             }
         }
-        // Unknown fallback: always available, ensures the lattice is
-        // connected even when the user types an OOV sequence.  Single
-        // hiragana char as surface so picking this segment commits the
-        // raw kana that the user typed.
+        // Unknown fallback (single hiragana char), always available.
         edgesEndingAt[i + 1].push_back(Edge{
             i, i + 1, std::wstring(1, kana[i]),
             kUnknownCostPerChar, kUnknownPos, kUnknownPos, true
         });
-        (void)anyMatch;
     }
+    return edgesEndingAt;
+}
 
-    // ---- Step 2: forward DP -------------------------------------------
-    // 1-best per position.  bestCost[i] = min cost to reach position i
-    // from BOS; bestPrev[i] points to the edge used to arrive there
-    // (encoded as { end_pos, index_in_edgesEndingAt[end_pos] }).
-    constexpr int INF = INT_MAX / 4;
-    std::vector<int> bestCost(N + 1, INF);
-    bestCost[0] = 0;
-    std::vector<uint16_t> prevRid(N + 1, kBosEosPos);
-    struct Backptr { int endPos = -1; int edgeIdx = -1; };
-    std::vector<Backptr> back(N + 1);
+} // namespace
 
-    // Visit positions in order 1..N.  At each j, every edge ending at j
-    // contributes a candidate cost = bestCost[edge.start] + bigram
-    // (prev.rid -> edge.lid) + edge.cost.
+Viterbi::Result Viterbi::Best(std::wstring_view kana) const {
+    auto results = SearchTopK(kana, 1);
+    return results.empty() ? Result{} : std::move(results.front());
+}
+
+std::vector<Viterbi::Result> Viterbi::SearchTopK(std::wstring_view kana, int K) const {
+    std::vector<Result> out;
+    if (kana.empty() || !IsReady() || K <= 0) return out;
+    if (K > kMaxTopK) K = kMaxTopK;
+
+    const size_t N = kana.size();
+    auto edgesEndingAt = BuildLattice(kana, _dict);
+
+    // ---- Forward DP with top-K --------------------------------------
+    // topK[pos] is sorted ascending by cost; topK[pos][r] is the r-th
+    // best (zero-indexed) path from BOS to pos.  Position 0 has a single
+    // sentinel slot representing the empty path.
+    std::vector<std::vector<PathSlot>> topK(N + 1);
+    topK[0].push_back(PathSlot{ 0, -1, -1, -1, kBosEosPos });
+
     for (size_t j = 1; j <= N; ++j) {
         const auto& edges = edgesEndingAt[j];
         for (size_t k = 0; k < edges.size(); ++k) {
             const Edge& e = edges[k];
-            if (bestCost[e.start] >= INF) continue;
-            int bigram = _conn.Cost(prevRid[e.start], e.lid);
-            // INT16_MAX from the connector means "no transition data" -- treat
-            // as a stiff penalty rather than infinity so we still get *some*
-            // answer for unusual lid/rid pairs.
-            if (bigram == INT16_MAX) bigram = 30000;
-            int candidate = bestCost[e.start] + bigram + e.cost;
-            if (candidate < bestCost[j]) {
-                bestCost[j]   = candidate;
-                prevRid[j]    = e.rid;
-                back[j].endPos  = (int)j;
-                back[j].edgeIdx = (int)k;
+            const auto& prevSlots = topK[e.start];
+            if (prevSlots.empty()) continue;
+            for (size_t r = 0; r < prevSlots.size(); ++r) {
+                const PathSlot& prev = prevSlots[r];
+                if (prev.cost >= INF) continue;
+                int bigram = _conn.Cost(prev.pathRid, e.lid);
+                if (bigram == INT16_MAX) bigram = 30000;
+                int cost = prev.cost + bigram + e.cost;
+                if (cost >= INF) continue;
+                InsertTopK(topK[j], PathSlot{
+                    cost, (int)j, (int)k, (int)r, e.rid
+                }, K);
             }
         }
     }
 
-    if (bestCost[N] >= INF) {
-        // Should be unreachable because the unknown fallback covers every
-        // position, but bail safely just in case.
-        DBG("Viterbi::Best no path reached EOS");
-        return result;
+    // ---- EOS bigram + backtrack -------------------------------------
+    // Each rank at position N gets its EOS bigram added so the totalCost
+    // is comparable across runs.  We then walk back via the stored
+    // (edgeIdx, prevRank) chain to recover the segment list.
+    for (size_t r = 0; r < topK[N].size(); ++r) {
+        PathSlot& slot = topK[N][r];
+        if (slot.cost >= INF) continue;
+        int eosBigram = _conn.Cost(slot.pathRid, kBosEosPos);
+        if (eosBigram == INT16_MAX) eosBigram = 30000;
+        slot.cost += eosBigram;
     }
+    // EOS bigram may have changed the order; resort.
+    std::sort(topK[N].begin(), topK[N].end(),
+              [](const PathSlot& a, const PathSlot& b) { return a.cost < b.cost; });
 
-    // Final EOS bigram: connector.Cost(prevRid[N], BOS/EOS lid 0).  Add it to
-    // the reported total cost so downstream callers can compare paths from
-    // independent runs.
-    int eosBigram = _conn.Cost(prevRid[N], kBosEosPos);
-    if (eosBigram == INT16_MAX) eosBigram = 30000;
-    result.totalCost = bestCost[N] + eosBigram;
-
-    // ---- Step 3: backtrack --------------------------------------------
-    // Walk from N back to 0, collecting the edge that produced each best
-    // cost.  Reverse at the end so segments come out in left-to-right order.
-    int cur = (int)N;
-    while (cur > 0) {
-        const Backptr bp = back[cur];
-        if (bp.endPos < 0) {
-            DBGF("Viterbi::Best broken backptr at pos=%d", cur);
-            return Result{};   // signal failure
+    out.reserve(topK[N].size());
+    for (size_t r = 0; r < topK[N].size(); ++r) {
+        if (topK[N][r].cost >= INF) break;
+        Result result;
+        int curPos  = (int)N;
+        int curRank = (int)r;
+        bool ok = true;
+        while (curPos > 0) {
+            if (curRank < 0 || curRank >= (int)topK[curPos].size()) {
+                DBGF("Viterbi top-K backtrack broken pos=%d rank=%d", curPos, curRank);
+                ok = false;
+                break;
+            }
+            const PathSlot& slot = topK[curPos][curRank];
+            if (slot.edgeIdx < 0) break;
+            const Edge& e = edgesEndingAt[slot.edgeEnd][slot.edgeIdx];
+            result.segments.push_back(Segment{
+                e.start, e.end - e.start, e.surface, e.cost,
+                e.lid, e.rid, e.isUnknown
+            });
+            curRank = slot.prevRank;
+            curPos  = (int)e.start;
         }
-        const Edge& e = edgesEndingAt[bp.endPos][bp.edgeIdx];
-        result.segments.push_back(Segment{
-            e.start, e.end - e.start, e.surface, e.cost, e.lid, e.rid, e.isUnknown
-        });
-        cur = (int)e.start;
+        if (!ok || result.segments.empty()) continue;
+        std::reverse(result.segments.begin(), result.segments.end());
+        result.totalCost = topK[N][r].cost;
+        out.push_back(std::move(result));
     }
-    std::reverse(result.segments.begin(), result.segments.end());
-    return result;
+
+    // De-duplicate by joined surface so callers don't get multiple paths
+    // that produce the same visible string (different segment boundaries
+    // but identical concatenation).  Keep the cheapest of each group.
+    if (out.size() >= 2) {
+        std::vector<Result> dedup;
+        dedup.reserve(out.size());
+        for (auto& r : out) {
+            std::wstring joined = r.joinedSurface();
+            bool seen = false;
+            for (auto& d : dedup) {
+                if (d.joinedSurface() == joined) { seen = true; break; }
+            }
+            if (!seen) dedup.push_back(std::move(r));
+        }
+        out = std::move(dedup);
+    }
+
+    return out;
 }

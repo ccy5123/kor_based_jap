@@ -71,6 +71,13 @@ public:
     // Result when the engine is not ready or the input is empty.
     Result Best(std::wstring_view kana) const;
 
+    // Compute up to K best (lowest-cost) segmentations of `kana`.  Results
+    // are sorted by ascending totalCost (best first); the first entry is
+    // exactly what Best() would return.  Empty vector when the engine is
+    // not ready or the input is empty.  K is clamped to a small upper
+    // bound internally to keep per-position memory linear.
+    std::vector<Result> SearchTopK(std::wstring_view kana, int K) const;
+
 private:
     const RichDictionary& _dict;
     const Connector&      _conn;

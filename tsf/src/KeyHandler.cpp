@@ -293,26 +293,33 @@ static bool TryStartConversion(KorJpnIme *pIme, HangulComposer& composer, ITfCon
 
     // ---- Viterbi path ---------------------------------------------------
     Viterbi viterbi(rich, conn);
-    Viterbi::Result vrs;
+    std::vector<Viterbi::Result> topResults;
     if (viterbi.IsReady()) {
-        vrs = viterbi.Best(pending);
+        // Top-K paths.  K=5 is a compromise: enough alternative
+        // segmentations to surface verb-conjugation / particle variants
+        // the 1-best path missed, but small enough that the candidate
+        // window doesn't drown in near-duplicates.  Duplicate joined
+        // surfaces are already collapsed inside SearchTopK.
+        topResults = viterbi.SearchTopK(pending, 5);
     }
 
-    if (!vrs.empty()) {
+    if (!topResults.empty()) {
+        const Viterbi::Result& best = topResults.front();
+
         // First-segment span comes from viterbi's segmentation choice.
-        const auto& first = vrs.segments.front();
+        const auto& first = best.segments.front();
         matched = pending.substr(first.kanaStart, first.kanaLen);
 
-        // (a) Joined surface across ALL segments -- top candidate when
-        // there is more than one segment AND at least one segment is a
-        // real dictionary hit (otherwise the joined surface is just the
-        // raw kana, which is already covered by the fallback below).
-        if (vrs.segments.size() >= 2) {
+        // (a) Joined surfaces from ALL top-K paths -- each consumes the
+        // entire pending buffer in one commit.  Skip single-segment
+        // paths (duplicates of the per-segment candidates below) and
+        // all-unknown paths (raw kana, already covered by the fallback).
+        for (const auto& r : topResults) {
+            if (r.segments.size() < 2) continue;
             bool anyReal = false;
-            for (const auto& s : vrs.segments) if (!s.isUnknown) { anyReal = true; break; }
-            if (anyReal) {
-                addCandidate(vrs.joinedSurface(), pending);
-            }
+            for (const auto& s : r.segments) if (!s.isUnknown) { anyReal = true; break; }
+            if (!anyReal) continue;
+            addCandidate(r.joinedSurface(), pending);
         }
 
         // (b) User-learned picks for the matched prefix

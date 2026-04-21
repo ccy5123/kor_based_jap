@@ -71,12 +71,25 @@ from typing import Iterable
 
 
 def read_dict_rows(src_dir: str) -> Iterable[tuple[str, int, int, int, str]]:
-    paths = sorted(glob.glob(os.path.join(src_dir, "dictionary*.txt")))
-    if not paths:
+    """Yield rows from dictionary00..09.txt AND suffix.txt.
+
+    Both files use the same 5-column TSV format (reading, lid, rid, cost,
+    surface).  suffix.txt contributes the inflectional endings and
+    particles (る, た, ます, の, を, へ, は, ...) that let the viterbi
+    engine properly segment verb conjugations and compound forms.
+    Without these, たべます (no full-form dict entry) would decay to
+    たべ + <unknown> with a 50k+ penalty on the ます span.
+    """
+    dict_paths   = sorted(glob.glob(os.path.join(src_dir, "dictionary*.txt")))
+    suffix_path  = os.path.join(src_dir, "suffix.txt")
+    if not dict_paths:
         raise SystemExit(
             f"No dictionary*.txt under {src_dir}.  "
             "Run dict/mozc_src/fetch.sh first."
         )
+    paths = list(dict_paths)
+    if os.path.exists(suffix_path):
+        paths.append(suffix_path)
     for p in paths:
         with open(p, encoding="utf-8") as f:
             for line in f:
