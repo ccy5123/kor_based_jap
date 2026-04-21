@@ -83,6 +83,10 @@ STDMETHODIMP KorJpnIme::Deactivate() {
     _pendingKana.clear();
     if (_inConversion) ExitConversion();
 
+    // Persist user-dictionary changes.  Cheap (file is small) and ensures
+    // learning survives across IME deactivations / app close.
+    if (_userDict.IsDirty()) _userDict.Save();
+
     if (_pKeyHandler) {
         _pKeyHandler->Unadvise(_pThreadMgr);
         _pKeyHandler->Release();
@@ -142,4 +146,12 @@ void KorJpnIme::_LoadDictionary() {
     } else {
         DBGF("KorJpnIme::_LoadDictionary OK — %zu kana keys", _dict.KeyCount());
     }
+
+    // User dictionary: same directory, user_dict.txt.  Missing file is OK
+    // (just means a brand-new user with no learning yet).
+    wchar_t userPath[MAX_PATH] = {};
+    StringCchCopyW(userPath, MAX_PATH, dllPath);
+    StringCchCatW (userPath, MAX_PATH, L"user_dict.txt");
+    _userDict.Load(userPath);
+    DBGF("KorJpnIme::_LoadDictionary user_dict %zu kana keys", _userDict.KeyCount());
 }

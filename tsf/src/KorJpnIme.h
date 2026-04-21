@@ -1,6 +1,7 @@
 #pragma once
 #include "Globals.h"
 #include "Dictionary.h"
+#include "UserDict.h"
 #include "CandidateWindow.h"
 #include <string>
 #include <vector>
@@ -43,6 +44,10 @@ public:
         return _dict.IsLoaded() ? &_dict : nullptr;
     }
 
+    // Per-user learning dictionary (user_dict.txt next to the DLL).
+    UserDict&       GetUserDict()       { return _userDict; }
+    const UserDict& GetUserDict() const { return _userDict; }
+
     // Kana accumulation buffer for standard JP-IME-style preedit.
     // KeyHandler appends to this buffer when a syllable completes; Space
     // triggers conversion (kanji candidate window); Enter commits raw kana.
@@ -79,6 +84,7 @@ private:
     bool          _active       = true;
 
     Dictionary      _dict;            // loaded once on first Activate()
+    UserDict        _userDict;
     bool            _dictTried = false;
     std::wstring    _pendingKana;     // accumulated kana waiting for commit/conversion
     CandidateWindow _candidateWindow;

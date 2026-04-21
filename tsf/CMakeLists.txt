@@ -13,6 +13,7 @@ add_library(KorJpnIme SHARED
     src/KeyHandler.cpp
     src/Composition.cpp
     src/Dictionary.cpp        # kana→kanji lookup loaded from dict/jpn_dict.txt
+    src/UserDict.cpp          # per-user learning dictionary (user_dict.txt)
     src/CandidateWindow.cpp   # Win32 popup showing kanji candidates
     src/pthread_stub.cpp      # Win32 FLS stubs — eliminates libwinpthread-1.dll dependency
 )

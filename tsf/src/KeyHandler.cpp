@@ -547,34 +547,60 @@ static bool FlushAndCommit(KorJpnIme *pIme, HangulComposer& composer, ITfContext
 // if there are candidates, show the candidate window and switch to conversion
 // mode.  Returns true if conversion started; false if there's nothing to
 // convert (caller should fall back to plain commit).
+//
+// Candidates are merged from two sources, in priority order:
+//   1. UserDict::GetPreferred (user-learned picks, sorted by usage count desc)
+//   2. Dictionary::Lookup     (mecab-ipadic, sorted by intrinsic frequency)
+//   3. The raw kana itself (always last fallback, so the user can type words
+//      that have no dictionary entry and still commit them as hiragana).
+// Duplicates are dropped while preserving the user-preferred entries' priority.
 static bool TryStartConversion(KorJpnIme *pIme, HangulComposer& composer) {
     // Flush any in-progress syllable into pending so the lookup uses the full word.
     std::wstring tail = composer.flush();
     if (!tail.empty()) AppendKanaFor(pIme, tail[0], 0);
 
-    const std::wstring& pending = pIme->PendingKana();
+    const std::wstring pending = pIme->PendingKana();
     if (pending.empty()) return false;
 
-    const Dictionary *dict = pIme->GetDictionary();
-    if (!dict) return false;
+    std::vector<std::wstring> candidates;
+    auto pushUnique = [&](const std::wstring& s) {
+        if (s.empty()) return;
+        if (std::find(candidates.begin(), candidates.end(), s) != candidates.end())
+            return;
+        candidates.push_back(s);
+    };
 
-    std::vector<std::wstring> candidates = dict->Lookup(pending);
-    // Always offer the raw kana as the LAST candidate (if not already there).
-    if (std::find(candidates.begin(), candidates.end(), pending) == candidates.end()) {
-        candidates.push_back(pending);
+    // 1. user-learned (highest priority)
+    for (auto& kanji : pIme->GetUserDict().GetPreferred(pending)) {
+        pushUnique(kanji);
     }
-    if (candidates.empty()) return false;
+    // 2. system dictionary
+    if (const Dictionary *dict = pIme->GetDictionary()) {
+        for (auto& kanji : dict->Lookup(pending)) {
+            pushUnique(kanji);
+        }
+    }
+    // 3. raw kana fallback
+    pushUnique(pending);
 
+    if (candidates.empty()) return false;
     pIme->EnterConversion(candidates);
     return true;
 }
 
-// Commit the currently selected candidate from the candidate window, clear
-// the pending buffer, and exit conversion mode.
+// Commit the currently selected candidate from the candidate window, learn it,
+// clear the pending buffer, and exit conversion mode.
 static void CommitSelectedCandidate(KorJpnIme *pIme, ITfContext *pCtx) {
     std::wstring sel = pIme->GetCandidateWindow().GetSelected();
+    std::wstring kana = pIme->PendingKana();   // capture before ClearPending
     if (!sel.empty()) {
         pIme->CommitText(pCtx, sel);
+        // Only record if the user picked something different from the raw kana,
+        // i.e. an actual conversion (avoid polluting the user dict with
+        // identity entries like かんじ→かんじ).
+        if (sel != kana) {
+            pIme->GetUserDict().Record(kana, sel);
+        }
     }
     pIme->ClearPending();
     pIme->UpdatePreedit(pCtx, L"");
@@ -636,32 +662,37 @@ STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
     }
 
     // ---- F6 / F7: character-type conversion --------------------------------
-    // F6 → commit current preedit as hiragana
-    if (vk == VK_F6) {
-        bool committed = FlushAndCommit(_pIme, _composer, pCtx);
-        *pfEaten = committed;
-        return S_OK;
-    }
-    // F7 → commit as full-width katakana
-    if (vk == VK_F7) {
+    // F6 → commit pending as hiragana (cancels any active conversion).
+    // F7 → commit pending as full-width katakana.
+    // Both work whether or not the candidate window is up — Standard JP-IME
+    // convention is to use them as a quick "I don't want kanji, just commit
+    // the kana form" shortcut.
+    if (vk == VK_F6 || vk == VK_F7) {
+        // Drop the candidate window if it's open — F6/F7 mean "ignore conversion".
+        if (_pIme->IsInConversion()) _pIme->ExitConversion();
+
         std::wstring tail = _composer.flush();
         if (!tail.empty()) AppendKanaFor(_pIme, tail[0], 0);
-        const std::wstring& pending = _pIme->PendingKana();
-        if (!pending.empty()) {
-            _pIme->CommitText(pCtx, toKatakanaStr(pending));
-            _pIme->ClearPending();
-            _pIme->UpdatePreedit(pCtx, L"");
-            *pfEaten = TRUE;
-        } else {
+
+        std::wstring text = _pIme->PendingKana();
+        if (text.empty()) {
             *pfEaten = FALSE;
+            return S_OK;
         }
+        if (vk == VK_F7) text = toKatakanaStr(text);
+
+        _pIme->CommitText(pCtx, text);
+        _pIme->ClearPending();
+        _pIme->UpdatePreedit(pCtx, L"");
+        *pfEaten = TRUE;
         return S_OK;
     }
 
     // ---- CONVERSION MODE keys ---------------------------------------------
-    // When the candidate window is up the only keys we honour are navigation
-    // and selection; everything else commits the current selection first and
-    // then falls through to be processed against an empty composer.
+    // When the candidate window is up the only keys we honour are navigation,
+    // selection, and the F6/F7 character-type shortcuts; everything else
+    // commits the current selection first and then falls through to be
+    // processed against an empty composer.
     if (_pIme->IsInConversion()) {
         CandidateWindow& cw = _pIme->GetCandidateWindow();
         if (vk == VK_SPACE || vk == VK_TAB || vk == VK_DOWN) {
@@ -690,6 +721,17 @@ STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
             // Cancel conversion — keep the kana preedit so user can keep typing.
             _pIme->ExitConversion();
             _pIme->UpdatePreedit(pCtx, BuildPreedit(_pIme, _composer));
+            *pfEaten = TRUE; return S_OK;
+        }
+        // F6 / F7: discard candidate selection, commit the raw kana as
+        // hiragana / katakana respectively.
+        if (vk == VK_F6 || vk == VK_F7) {
+            std::wstring text = _pIme->PendingKana();
+            if (vk == VK_F7) text = toKatakanaStr(text);
+            _pIme->ExitConversion();
+            _pIme->CommitText(pCtx, text);
+            _pIme->ClearPending();
+            _pIme->UpdatePreedit(pCtx, L"");
             *pfEaten = TRUE; return S_OK;
         }
         // Anything else: commit current selection and let the key be re-processed
