@@ -11,6 +11,7 @@ add_library(KorJpnIme SHARED
     src/dllmain.cpp
     src/KorJpnIme.cpp
     src/KeyHandler.cpp
+    src/HangulComposer.cpp    # VkToJamo + HangulComposer state machine (pure, testable)
     src/Composition.cpp
     src/Dictionary.cpp        # legacy kana→kanji text dict (jpn_dict.txt)
     src/RichDictionary.cpp    # viterbi-engine rich dict w/ lid/rid/cost (kj_dict.bin)

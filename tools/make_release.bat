@@ -54,11 +54,13 @@ cl.exe /nologo /std:c++20 /O2 /EHsc /MD ^
     "%SRC_ROOT%\src\dllmain.cpp" ^
     "%SRC_ROOT%\src\KorJpnIme.cpp" ^
     "%SRC_ROOT%\src\KeyHandler.cpp" ^
+    "%SRC_ROOT%\src\HangulComposer.cpp" ^
     "%SRC_ROOT%\src\Composition.cpp" ^
     "%SRC_ROOT%\src\Dictionary.cpp" ^
     "%SRC_ROOT%\src\RichDictionary.cpp" ^
     "%SRC_ROOT%\src\Connector.cpp" ^
     "%SRC_ROOT%\src\Viterbi.cpp" ^
+    "%SRC_ROOT%\src\DisplayAttributes.cpp" ^
     "%SRC_ROOT%\src\UserDict.cpp" ^
     "%SRC_ROOT%\src\Settings.cpp" ^
     "%SRC_ROOT%\src\CandidateWindow.cpp" ^
