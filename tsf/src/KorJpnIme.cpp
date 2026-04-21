@@ -1,8 +1,10 @@
 #include "KorJpnIme.h"
 #include "KeyHandler.h"
 #include "Composition.h"
+#include "DisplayAttributes.h"
 #include "DebugLog.h"
 #include <strsafe.h>
+#include <new>
 
 extern HINSTANCE g_hModule;
 
@@ -22,7 +24,13 @@ STDMETHODIMP KorJpnIme::QueryInterface(REFIID riid, void **ppv) {
     if (riid == IID_IUnknown || riid == IID_ITfTextInputProcessor) {
         *ppv = static_cast<ITfTextInputProcessor*>(this);
         AddRef();
-        DBG("  -> S_OK");
+        DBG("  -> S_OK (ITfTextInputProcessor)");
+        return S_OK;
+    }
+    if (riid == IID_ITfDisplayAttributeProvider) {
+        *ppv = static_cast<ITfDisplayAttributeProvider*>(this);
+        AddRef();
+        DBG("  -> S_OK (ITfDisplayAttributeProvider)");
         return S_OK;
     }
     *ppv = nullptr;
@@ -34,6 +42,28 @@ STDMETHODIMP_(ULONG) KorJpnIme::Release() {
     LONG c = InterlockedDecrement(&_cRef);
     if (!c) delete this;
     return c;
+}
+
+// ITfDisplayAttributeProvider -------------------------------------------------
+STDMETHODIMP KorJpnIme::EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo **ppEnum) {
+    if (!ppEnum) return E_INVALIDARG;
+    auto *e = new (std::nothrow) ::EnumDisplayAttributeInfo();
+    if (!e) return E_OUTOFMEMORY;
+    *ppEnum = e;
+    return S_OK;
+}
+
+STDMETHODIMP KorJpnIme::GetDisplayAttributeInfo(REFGUID guid,
+                                                 ITfDisplayAttributeInfo **ppInfo) {
+    if (!ppInfo) return E_INVALIDARG;
+    *ppInfo = nullptr;
+    if (!IsEqualGUID(guid, GUID_DISPLAYATTR_INPUT)) {
+        return E_INVALIDARG;   // we only expose the one attribute
+    }
+    auto *info = new (std::nothrow) ::DisplayAttributeInfo();
+    if (!info) return E_OUTOFMEMORY;
+    *ppInfo = info;
+    return S_OK;
 }
 
 // @MX:ANCHOR: Activate wires all subsystems together — the single entry point for IME lifecycle

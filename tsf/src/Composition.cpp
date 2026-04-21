@@ -1,6 +1,8 @@
 #include "Composition.h"
 #include "KorJpnIme.h"
+#include "DisplayAttributes.h"
 #include "DebugLog.h"
+#include <oleauto.h>
 
 // ============================================================================
 // Composition manager — preedit display + commit.
@@ -39,6 +41,63 @@ HRESULT GetInsertionRange(TfEditCookie ec, ITfContext *pCtx, ITfRange **ppOut) {
     return S_OK;
 }
 
+// ----------------------------------------------------------------------------
+// Lazily fetch (and cache) the TfGuidAtom that TSF assigns to our custom
+// GUID_DISPLAYATTR_INPUT.  The atom is stable for the lifetime of the thread
+// manager; once TSF hands it out, the same value identifies our attribute on
+// every subsequent SetValue() call.
+//
+// Returns TF_INVALID_GUIDATOM silently when the category manager can't be
+// created or the GUID isn't registered (the IME still works, it just falls
+// back to Windows' default composition underline).
+// ----------------------------------------------------------------------------
+TfGuidAtom GetInputAttrAtom() {
+    static TfGuidAtom cached = TF_INVALID_GUIDATOM;
+    static bool       tried  = false;
+    if (cached != TF_INVALID_GUIDATOM) return cached;
+    if (tried) return TF_INVALID_GUIDATOM;
+    tried = true;
+
+    ITfCategoryMgr *pCatMgr = nullptr;
+    HRESULT hr = CoCreateInstance(CLSID_TF_CategoryMgr, nullptr,
+                                   CLSCTX_INPROC_SERVER,
+                                   IID_ITfCategoryMgr,
+                                   reinterpret_cast<void**>(&pCatMgr));
+    if (FAILED(hr) || !pCatMgr) {
+        DBGF("GetInputAttrAtom CoCreateInstance(CategoryMgr) hr=0x%08lX", (long)hr);
+        return TF_INVALID_GUIDATOM;
+    }
+    hr = pCatMgr->RegisterGUID(GUID_DISPLAYATTR_INPUT, &cached);
+    pCatMgr->Release();
+    if (FAILED(hr)) {
+        DBGF("GetInputAttrAtom RegisterGUID hr=0x%08lX", (long)hr);
+        cached = TF_INVALID_GUIDATOM;
+    }
+    return cached;
+}
+
+// Paint our dotted-blue underline onto `pRange` by setting the standard
+// GUID_PROP_ATTRIBUTE property with the TfGuidAtom from GetInputAttrAtom().
+// Silently no-ops when any step fails -- the worst case is that Windows
+// draws its own default underline, which is the pre-DisplayAttributeProvider
+// behaviour we used to ship anyway.
+void ApplyInputAttr(TfEditCookie ec, ITfContext *pCtx, ITfRange *pRange) {
+    if (!pCtx || !pRange) return;
+    TfGuidAtom atom = GetInputAttrAtom();
+    if (atom == TF_INVALID_GUIDATOM) return;
+
+    ITfProperty *pProp = nullptr;
+    if (FAILED(pCtx->GetProperty(GUID_PROP_ATTRIBUTE, &pProp)) || !pProp) return;
+
+    VARIANT var;
+    VariantInit(&var);
+    var.vt   = VT_I4;
+    var.lVal = static_cast<LONG>(atom);
+    pProp->SetValue(ec, pRange, &var);
+    VariantClear(&var);
+    pProp->Release();
+}
+
 } // namespace
 
 // ============================================================================
@@ -71,6 +130,12 @@ STDMETHODIMP StartAndSetTextSession::DoEditSession(TfEditCookie ec) {
         ITfRange *pRange = nullptr;
         if (SUCCEEDED(pNewComp->GetRange(&pRange))) {
             pRange->SetText(ec, 0, _text.c_str(), static_cast<LONG>(_text.size()));
+            // Only style the range when we're keeping the composition alive;
+            // terminating sessions flush to the document as final text, which
+            // should use the host app's normal foreground (no underline).
+            if (!_terminate) {
+                ApplyInputAttr(ec, _pCtx, pRange);
+            }
             pRange->Release();
         }
     }
@@ -124,6 +189,11 @@ STDMETHODIMP SetTextSession::DoEditSession(TfEditCookie ec) {
         _pComp->EndComposition(ec);
         _pCompMgr->_ClearComposition();
     } else {
+        // Keep the composition alive -- style the preedit range with our
+        // dotted blue underline before releasing it.  ApplyInputAttr is a
+        // silent no-op when the CategoryMgr / property plumbing fails, so
+        // the worst case is that Windows draws its default underline.
+        ApplyInputAttr(ec, _pCtx, pRange);
         pRange->Release();
         // Re-cache the caret rect after preedit text changes — the box
         // typically grows/shrinks with each keystroke and we want the

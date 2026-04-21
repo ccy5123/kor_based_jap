@@ -16,7 +16,8 @@ class Composition;
 
 // @MX:ANCHOR: KorJpnIme is the root COM object — ITfTextInputProcessor entry point
 // @MX:REASON: All TSF subsystems (key handler, composition) are owned and lifetime-managed here
-class KorJpnIme : public ITfTextInputProcessor {
+class KorJpnIme : public ITfTextInputProcessor,
+                  public ITfDisplayAttributeProvider {
 public:
     KorJpnIme();
     ~KorJpnIme();
@@ -29,6 +30,13 @@ public:
     // ITfTextInputProcessor
     STDMETHODIMP Activate(ITfThreadMgr *pThreadMgr, TfClientId tid) override;
     STDMETHODIMP Deactivate() override;
+
+    // ITfDisplayAttributeProvider -- exposes the dotted-underline style that
+    // Composition sets on the preedit range via GUID_PROP_ATTRIBUTE.  See
+    // DisplayAttributes.{h,cpp} for the actual attribute definition.
+    STDMETHODIMP EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo **ppEnum) override;
+    STDMETHODIMP GetDisplayAttributeInfo(REFGUID guid,
+                                          ITfDisplayAttributeInfo **ppInfo) override;
 
     // Accessors used by KeyHandler and Composition
     TfClientId  GetClientId() const { return _tid; }
