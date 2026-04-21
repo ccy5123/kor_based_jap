@@ -1,0 +1,10 @@
+# Viterbi engine binary data files (~70 MB total).  Regenerated from
+# Mozc OSS source TSVs (under mozc_src/, also gitignored) via:
+#     python3 build_viterbi_data.py
+# The release pipeline (tools/make_release.bat) calls the builder before
+# bundling so end users never need to run it manually.
+kj_dict.bin
+kj_conn.bin
+
+# One-shot inspection scripts kept locally for debugging.
+inspect_mozc.py
