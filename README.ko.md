@@ -32,7 +32,7 @@ viterbi 기반 분절 엔진으로 한자 후보를 제공합니다.
 
 - **한국어 2벌식 → 일본어 카나**: 복합 모음 (ㅗ+ㅏ=ㅘ → わ), 복합 종성
   (ㄴ+ㅈ=ㄵ → 분리 마이그레이션) 완전 지원
-- **하츠온 ん / 소쿠온 っ 자동 감지**: ㄴㅁㅇ → ん, ㅎ → っ, ㅅㅆ는 문장
+- **발음 ん / 촉음 っ 자동 감지**: ㄴㅁㅇ → ん, ㅎ → っ, ㅅㅆ는 문장
   끝이나 자음 앞에서 → っ 등
 - **Mozc OSS 사전**: 약 75만 개 고유 kana 키, 약 129만 엔트리, Mozc
   원본 비용값 포함
@@ -143,7 +143,7 @@ mapping/syllables.yaml        한국어 음절 → 카나 매핑 테이블 (~150
    ↓ tsf/tools/gen_table.py
 tsf/generated/
    ├── mapping_table.h        이진 검색용 정렬된 constexpr Entry[]
-   └── batchim_rules.h        받침 → 카나 접미사 규칙 (소쿠온/하츠온)
+   └── batchim_rules.h        받침 → 카나 접미사 규칙 (촉음/발음)
 
 dict/
    ├── jpn_dict.txt           레거시 텍스트 사전 (kana → kanji TSV, 18 MB)
