@@ -565,12 +565,6 @@ static void AppendKanaFor(KorJpnIme *pIme, wchar_t ch, wchar_t nextJamo) {
 
 // Build the visible preedit string: pending_kana + (current_in-progress syllable
 // rendered as kana when possible, otherwise raw Korean jamo).
-//
-// When persistent katakana mode is active (RAlt+K), prepend a small triangle
-// marker so the user has a visible cue even when the underlying kana
-// characters look ambiguous (some shapes are nearly identical between
-// hiragana and katakana, e.g. へ vs ヘ).  The marker is decorative only --
-// it never reaches CommitText() because that path uses _pendingKana directly.
 static std::wstring BuildPreedit(KorJpnIme *pIme, HangulComposer& composer) {
     std::wstring pre = pIme->PendingKana();
     std::wstring cur = composer.preedit();
@@ -581,12 +575,6 @@ static std::wstring BuildPreedit(KorJpnIme *pIme, HangulComposer& composer) {
         } else {
             pre += cur;     // bare consonant or vowel jamo
         }
-    }
-    // Only prepend the katakana marker when there is actual content to mark;
-    // an empty preedit must stay empty so the host app's caret/selection
-    // rendering doesn't change while the user isn't composing.
-    if (!pre.empty() && pIme->IsKatakanaMode()) {
-        pre.insert(0, L"\u25B2 ");   // BLACK UP-POINTING TRIANGLE + space
     }
     return pre;
 }
@@ -606,8 +594,7 @@ static bool FlushAndCommit(KorJpnIme *pIme, HangulComposer& composer, ITfContext
     return true;
 }
 
-// Try to start kanji conversion.  Strategy (reverted to the simple,
-// predictable behaviour):
+// Try to start kanji conversion.  Strategy:
 //   1. Flush any in-progress syllable into _pendingKana.
 //   2. Find the LONGEST prefix of _pendingKana that has any dictionary
 //      candidates (UserDict first, then system Dictionary).  If nothing
@@ -616,12 +603,20 @@ static bool FlushAndCommit(KorJpnIme *pIme, HangulComposer& composer, ITfContext
 //   3. Build the candidate list for THAT prefix:
 //        a. user-learned picks (UserDict.GetPreferred, sorted by usage count
 //           desc — this is what makes the IME "remember" your choices)
-//        b. system dictionary entries (mecab-ipadic, intrinsic frequency order)
-//        c. the raw matched prefix as kana (always last fallback)
+//        b. system dictionary entries (Mozc OSS data, intrinsic cost order)
+//        c. the raw matched prefix as kana (fallback)
+//        d. katakana of the matched prefix (auto-katakana, always)
 //      Dedup while preserving order so user picks bubble to the top.
-//   4. Every candidate carries the SAME prefix (the matched one).  Anything
-//      after the prefix in _pendingKana stays as preedit after commit so the
-//      user can convert the rest as the next segment.
+//   4. When the matched prefix is shorter than the full pending (the
+//      loanword case — dict couldn't find the whole word, e.g.
+//      はんばーがー), also append full pending hiragana + full pending
+//      katakana with the FULL pending as their prefix.  These let the
+//      user commit the entire typed string in one shot via the candidate
+//      window without having to flip a mode toggle.
+//   5. Per-candidate prefixes are stored in `prefixes` parallel to `cands`;
+//      anything after the chosen candidate's prefix in _pendingKana stays
+//      as preedit after commit so the user can convert the rest as the
+//      next segment.
 //
 // (No multi-prefix gathering, no 2-segment composition — those were tried
 // previously and disrupted both the user-learning ordering and obvious
@@ -672,8 +667,38 @@ static bool TryStartConversion(KorJpnIme *pIme, HangulComposer& composer, ITfCon
     }
     if (cands.empty()) return false;
 
-    // Every candidate consumes the same matched prefix.
+    // Every kanji/dict candidate so far consumes the matched prefix.
     std::vector<std::wstring> prefixes(cands.size(), matched);
+
+    // ---- Auto-katakana suggestions ---------------------------------------
+    // The dict builder strips pure-kana surfaces, so loanwords like
+    // ハンバーガー never reach the candidate list through the normal lookup
+    // path.  Synthesize them here so the user always has a katakana option
+    // without needing a mode toggle.
+    //
+    // Two layers:
+    //   (a) katakana of the matched prefix -- always offered, sits next to
+    //       the raw-hiragana fallback (so わたし also gets ワタシ in the list).
+    //   (b) full pending hiragana + katakana -- only when the longest dict
+    //       prefix is shorter than what the user actually typed.  This is
+    //       the loanword case (e.g. はんばーがー matches only は in the
+    //       dict, leaving んばーがー stranded).  These carry the FULL
+    //       pending as their prefix so picking them consumes everything in
+    //       one commit.
+    auto addCandidate = [&](const std::wstring& s, const std::wstring& prefix) {
+        if (s.empty()) return;
+        if (std::find(cands.begin(), cands.end(), s) != cands.end()) return;
+        cands.push_back(s);
+        prefixes.push_back(prefix);
+    };
+
+    addCandidate(kana::toKatakanaStr(matched), matched);
+
+    if (matched.size() < pending.size()) {
+        addCandidate(pending, pending);
+        addCandidate(kana::toKatakanaStr(pending), pending);
+    }
+
     pIme->EnterConversion(cands, prefixes, pCtx);
     return true;
 }

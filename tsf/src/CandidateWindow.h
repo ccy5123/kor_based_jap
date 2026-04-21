@@ -81,12 +81,6 @@ private:
 
     void Reposition(int width, int height);   // applies caret rect + clipping
 
-    // Height reserved at top for the persistent katakana-mode badge.
-    // Returns 0 when the IME is in normal hiragana mode -- callers must add
-    // this to every height calculation and y-offset so the candidate rows
-    // stay aligned regardless of which mode is active.
-    int HeaderHeight() const;
-
     HWND  _hWnd        = nullptr;
     HFONT _hFont       = nullptr;
     bool  _visible     = false;
