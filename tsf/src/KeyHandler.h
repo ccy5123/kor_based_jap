@@ -10,8 +10,22 @@ class HangulComposer {
 public:
     HangulComposer();
 
+    // Sentinel character (Unicode private-use area) returned from input()
+    // when a Korean keystroke pattern with no native meaning is repurposed
+    // to emit a Japanese-only kana.  The call site translates the marker to
+    // the real kana before appending to the pending buffer.
+    //
+    //   kWoMarker = ㅇ-ㅗ-ㅗ -> を   (Japanese object particle "wo")
+    //               ㅇ-ㅗ-ㅇ-ㅗ stays as 오오 -> おお (long vowel intact)
+    //
+    // The marker is never displayed to the user -- it lives only in the
+    // brief gap between HangulComposer::input() returning and the call site
+    // mapping it to actual kana.
+    static constexpr wchar_t kWoMarker = L'\uE000';
+
     // Feed one jamo (or Latin key). Returns:
     //   - completed syllable if one was just finished (NFC unicode char as wstring)
+    //   - kWoMarker if a special pattern fired (caller must translate)
     //   - empty string if still composing
     // Call flush() at word boundary to retrieve any in-progress syllable.
     std::wstring input(wchar_t jamo);
