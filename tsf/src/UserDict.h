@@ -35,6 +35,17 @@ public:
     // sorted by descending count (most frequent first).  Empty vector if none.
     std::vector<std::wstring> GetPreferred(const std::wstring& kana) const;
 
+    // LFU eviction: if the total number of (kana, kanji) pairs exceeds
+    // maxEntries, drop the lowest-count entries until the size is back at
+    // or below the cap.  Ties broken by alphabetic kana, then kanji, so the
+    // result is deterministic.  No-op when maxEntries <= 0 or already under.
+    // Marks the dict dirty if anything was removed.
+    void Prune(int maxEntries);
+
+    // Total (kana, kanji) pairs across all kana keys (for diagnostics +
+    // pruning thresholds).
+    size_t TotalEntries() const;
+
     bool IsLoaded() const { return _loaded; }
     bool IsDirty()  const { return _dirty; }
     size_t KeyCount() const { return _data.size(); }

@@ -51,7 +51,11 @@ public:
     const UserDict& GetUserDict() const { return _userDict; }
 
     // User settings loaded from %APPDATA%\KorJpnIme\settings.ini
-    const Settings& GetSettings() const { return _settings; }
+    const Settings& GetSettings()        const { return _settings; }
+    // Mutable accessor used by KeyHandler::OnTestKeyDown to drive
+    // Settings::MaybeReload() — the hot-reload poll mutates the cached
+    // notification handle and may re-Load() the INI in place.
+    Settings&       GetSettingsMutable()       { return _settings; }
 
     // Kana accumulation buffer for standard JP-IME-style preedit.
     // KeyHandler appends to this buffer when a syllable completes; Space

@@ -87,8 +87,13 @@ STDMETHODIMP KorJpnIme::Deactivate() {
     if (_inConversion) ExitConversion();
 
     // Persist user-dictionary changes.  Cheap (file is small) and ensures
-    // learning survives across IME deactivations / app close.
-    if (_userDict.IsDirty()) _userDict.Save();
+    // learning survives across IME deactivations / app close.  Prune to
+    // the configured cap before saving so the file stays bounded over time
+    // — entries with the lowest pick-count get evicted (LFU).
+    if (_userDict.IsDirty()) {
+        _userDict.Prune(_settings.UserDictMaxEntries());
+        _userDict.Save();
+    }
 
     if (_pKeyHandler) {
         _pKeyHandler->Unadvise(_pThreadMgr);

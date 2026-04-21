@@ -496,6 +496,11 @@ STDMETHODIMP KeyHandler::OnTestKeyDown(ITfContext *pCtx, WPARAM wParam,
         return S_OK;
     }
 
+    // Cheap settings hot-reload check (kernel event poll, no I/O when nothing
+    // changed).  Means edits to %APPDATA%\KorJpnIme\settings.ini take effect
+    // on the next keystroke instead of requiring a logout/login cycle.
+    _pIme->GetSettingsMutable().MaybeReload();
+
     // While the candidate window is up we eat navigation / selection / commit
     // keys so OnKeyDown can drive the conversion UI.
     if (_pIme->IsInConversion()) {

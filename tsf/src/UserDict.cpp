@@ -125,6 +125,52 @@ void UserDict::Record(const std::wstring& kana, const std::wstring& kanji) {
     _dirty = true;
 }
 
+size_t UserDict::TotalEntries() const {
+    size_t n = 0;
+    for (const auto& kv : _data) n += kv.second.size();
+    return n;
+}
+
+void UserDict::Prune(int maxEntries) {
+    if (maxEntries <= 0) return;                  // 0 = unlimited
+    const size_t cap = static_cast<size_t>(maxEntries);
+    size_t total = TotalEntries();
+    if (total <= cap) return;                     // already under budget
+
+    // Flatten all (kana, kanji, count) tuples so we can sort globally by
+    // count ascending (lowest first = first to evict).  Ties broken by
+    // alphabetic kana then kanji so the eviction decision is deterministic
+    // across runs / across OSes.
+    struct Entry {
+        const std::wstring *kana;
+        const std::wstring *kanji;
+        int count;
+    };
+    std::vector<Entry> flat;
+    flat.reserve(total);
+    for (const auto& kv : _data) {
+        for (const auto& kk : kv.second) {
+            flat.push_back({ &kv.first, &kk.first, kk.second });
+        }
+    }
+    std::sort(flat.begin(), flat.end(), [](const Entry& a, const Entry& b) {
+        if (a.count != b.count) return a.count < b.count;
+        if (*a.kana  != *b.kana)  return *a.kana  < *b.kana;
+        return *a.kanji < *b.kanji;
+    });
+
+    const size_t dropCount = total - cap;
+    DBGF("UserDict::Prune total=%zu cap=%zu evicting=%zu", total, cap, dropCount);
+
+    for (size_t i = 0; i < dropCount; ++i) {
+        auto kIt = _data.find(*flat[i].kana);
+        if (kIt == _data.end()) continue;
+        kIt->second.erase(*flat[i].kanji);
+        if (kIt->second.empty()) _data.erase(kIt);   // kana with no kanji left
+    }
+    _dirty = true;
+}
+
 std::vector<std::wstring> UserDict::GetPreferred(const std::wstring& kana) const {
     std::vector<std::wstring> result;
     auto it = _data.find(kana);

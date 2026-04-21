@@ -49,6 +49,45 @@ std::wstring Utf8ToUtf16(const std::string& s) {
 
 } // namespace
 
+Settings::~Settings() {
+    if (_changeHandle != INVALID_HANDLE_VALUE) {
+        FindCloseChangeNotification(_changeHandle);
+        _changeHandle = INVALID_HANDLE_VALUE;
+    }
+}
+
+bool Settings::MaybeReload() {
+    // Lazy open of the directory watch -- deferred until first MaybeReload()
+    // so that Load() itself doesn't pay for it (Load() may be called on a
+    // path we never end up watching, e.g. when AppData resolution failed).
+    if (_changeHandle == INVALID_HANDLE_VALUE) {
+        std::wstring dir = AppDataDir();
+        if (dir.empty()) return false;
+        // FILE_NOTIFY_CHANGE_LAST_WRITE only fires on actual writes -- reads
+        // and metadata-only updates (timestamps from antivirus etc.) are
+        // ignored.  We watch the parent dir because notifications on a single
+        // file are only available via the heavier ReadDirectoryChangesW path.
+        _changeHandle = FindFirstChangeNotificationW(
+            dir.c_str(), FALSE, FILE_NOTIFY_CHANGE_LAST_WRITE);
+        if (_changeHandle == INVALID_HANDLE_VALUE) {
+            DBGF("Settings::MaybeReload FindFirstChangeNotificationW failed err=%lu",
+                 (unsigned long)GetLastError());
+            return false;
+        }
+        return false;   // first call just installs the watch
+    }
+
+    // Non-blocking poll: returns immediately whether or not the dir changed.
+    DWORD wait = WaitForSingleObject(_changeHandle, 0);
+    if (wait != WAIT_OBJECT_0) return false;
+    // Re-arm the notification before reloading so we don't miss a write that
+    // arrives during Load().
+    FindNextChangeNotification(_changeHandle);
+    DBG("Settings::MaybeReload INI changed -- reloading");
+    Load();
+    return true;
+}
+
 void Settings::_ApplyDefaults() {
     // Default katakana toggle: Right Alt + K.
     // RAlt was chosen because it doesn't conflict with common app shortcuts
@@ -92,7 +131,14 @@ void Settings::_WriteDefaultFile() {
         "\n"
         "# Learn user-selected kanji conversions into user_dict.txt so frequent\n"
         "# picks bubble to the top of the candidate window.\n"
-        "UserDictLearn = true\n";
+        "UserDictLearn = true\n"
+        "\n"
+        "# Maximum (kana, kanji) pairs to keep in the user dictionary.  When\n"
+        "# the count exceeds this number after a learning session, entries\n"
+        "# with the lowest pick-count are dropped (LFU eviction) before the\n"
+        "# next save.  0 = unlimited.  Default 5000 keeps the file under\n"
+        "# ~200 KB.\n"
+        "UserDictMaxEntries = 5000\n";
     f.write(kDefault, sizeof(kDefault) - 1);
 }
 
@@ -161,6 +207,14 @@ void Settings::_ParseLine(const std::wstring& section, const std::wstring& key,
     } else if (section == L"Behavior") {
         if      (key == L"FullWidthAscii") _fullWidthAscii = ParseBool(value, _fullWidthAscii);
         else if (key == L"UserDictLearn")  _userDictLearn  = ParseBool(value, _userDictLearn);
+        else if (key == L"UserDictMaxEntries") {
+            try {
+                int n = std::stoi(value);
+                if (n >= 0) _userDictMaxEntries = n;   // 0 = unlimited
+            } catch (...) {
+                // malformed -> keep default
+            }
+        }
     }
 }
 

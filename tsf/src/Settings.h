@@ -21,6 +21,10 @@
 //     # Learn user-selected kanji to user_dict.txt so frequent picks bubble up.
 //     UserDictLearn = true
 //
+//     # Cap on (kana, kanji) pairs in user_dict.txt; LFU-evict on save.
+//     # 0 = unlimited.  Default 5000 keeps file under ~200 KB.
+//     UserDictMaxEntries = 5000
+//
 // Missing sections/keys fall back to the compiled-in defaults.  Malformed
 // values are silently ignored; nothing throws or aborts the IME.
 // ----------------------------------------------------------------------------
@@ -60,6 +64,7 @@ public:
     };
 
     Settings() = default;
+    ~Settings();
 
     // Load %APPDATA%\KorJpnIme\settings.ini.  If missing, write the default
     // file so the user can find it and edit it.  Always returns true (errors
@@ -69,10 +74,21 @@ public:
     // Path of the on-disk settings file (after Load() has resolved %APPDATA%).
     const std::wstring& Path() const { return _path; }
 
+    // Cheap polling check: if the INI file has been modified since the last
+    // Load() (detected via FindFirstChangeNotificationW on the parent dir),
+    // re-Load() and return true.  Otherwise returns false in O(1).  Safe to
+    // call on every keystroke -- the notification handle is just a kernel
+    // event check, no I/O when nothing changed.
+    bool MaybeReload();
+
     // ---- Accessors --------------------------------------------------------
-    const Hotkey& KatakanaToggle()  const { return _katakanaToggle; }
-    bool          FullWidthAscii()  const { return _fullWidthAscii; }
-    bool          UserDictLearn()   const { return _userDictLearn; }
+    const Hotkey& KatakanaToggle()      const { return _katakanaToggle; }
+    bool          FullWidthAscii()      const { return _fullWidthAscii; }
+    bool          UserDictLearn()       const { return _userDictLearn; }
+    // Cap on (kana, kanji) pairs in user_dict.txt.  When the dict grows past
+    // this number after a learning session, lowest-count entries are dropped
+    // before save (LFU eviction).  0 = unlimited.  Default 5000.
+    int           UserDictMaxEntries()  const { return _userDictMaxEntries; }
 
 private:
     void   _ApplyDefaults();
@@ -83,6 +99,13 @@ private:
 
     std::wstring _path;
     Hotkey       _katakanaToggle;
-    bool         _fullWidthAscii = true;
-    bool         _userDictLearn  = true;
+    bool         _fullWidthAscii      = true;
+    bool         _userDictLearn       = true;
+    int          _userDictMaxEntries  = 5000;
+
+    // Directory-change notification handle for hot-reload.  Lazily opened on
+    // the first MaybeReload() call; closed in the destructor.  INVALID_HANDLE
+    // means either "not yet opened" or "FindFirstChangeNotificationW failed"
+    // (in which case hot-reload silently degrades to no-op).
+    HANDLE       _changeHandle = INVALID_HANDLE_VALUE;
 };
