@@ -28,8 +28,11 @@ set "BUILD_DIR=C:\Temp\KorJpnIme_msvc"
 
 if "%~1"=="" ( set "OUT_DIR=C:\Temp\KorJpnIme_release" ) else ( set "OUT_DIR=%~1" )
 
-if not exist "%VS_VCVARS%" (
-    echo ERROR: vcvars64.bat not found at: %VS_VCVARS%
+REM Use delayed expansion (!VAR!) inside the if-block — early %VS_VCVARS%
+REM expansion would inject unbalanced "(x86)" parens into the block body
+REM and break the cmd.exe parser.
+if not exist "!VS_VCVARS!" (
+    echo ERROR: vcvars64.bat not found at: !VS_VCVARS!
     echo Install Visual Studio 2022 Build Tools and try again.
     exit /b 1
 )
@@ -51,10 +54,11 @@ cl.exe /nologo /std:c++20 /O2 /EHsc /MD ^
     "%SRC_ROOT%\src\Composition.cpp" ^
     "%SRC_ROOT%\src\Dictionary.cpp" ^
     "%SRC_ROOT%\src\UserDict.cpp" ^
+    "%SRC_ROOT%\src\Settings.cpp" ^
     "%SRC_ROOT%\src\CandidateWindow.cpp" ^
     /Fe:KorJpnIme.dll ^
     /link /DEF:"%SRC_ROOT%\KorJpnIme.def" ^
-        ole32.lib oleaut32.lib advapi32.lib uuid.lib user32.lib gdi32.lib
+        ole32.lib oleaut32.lib advapi32.lib uuid.lib user32.lib gdi32.lib shell32.lib
 if errorlevel 1 ( echo BUILD FAILED & exit /b 1 )
 
 echo.

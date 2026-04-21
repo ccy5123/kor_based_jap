@@ -488,14 +488,22 @@ STDMETHODIMP KeyHandler::OnTestKeyDown(ITfContext *pCtx, WPARAM wParam,
     // Modifier-key combinations (Ctrl+X, Alt+X, Win+X) belong to the host
     // application as shortcuts — never eat them.  Plain Shift is allowed
     // because it's part of normal Korean jamo input (e.g. Shift+Q → ㅃ).
-    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-    bool alt  = (GetKeyState(VK_MENU)    & 0x8000) != 0;
-    bool win  = (GetKeyState(VK_LWIN)    & 0x8000) != 0
-             || (GetKeyState(VK_RWIN)    & 0x8000) != 0;
-    bool sh2  = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
-    // Exception: Ctrl+;  is OUR katakana-mode toggle — eat it.
-    if (ctrl && !sh2 && !alt && !win && vk == VK_OEM_1) {
-        *pfEaten = TRUE; return S_OK;
+    // Track LEFT/RIGHT Alt independently so RAlt-only / LAlt-only hotkeys
+    // (e.g. the Korean 한/영 key) can be detected.
+    bool ctrl    = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool altL    = (GetKeyState(VK_LMENU)   & 0x8000) != 0;
+    bool altR    = (GetKeyState(VK_RMENU)   & 0x8000) != 0;
+    bool alt     = altL || altR;
+    bool win     = (GetKeyState(VK_LWIN)    & 0x8000) != 0
+                || (GetKeyState(VK_RWIN)    & 0x8000) != 0;
+    bool sh2     = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
+    // Exception: the user-configured katakana toggle hotkey is always eaten
+    // even if it looks like a Ctrl/Alt/Win combo.
+    {
+        const Settings::Hotkey& hk = _pIme->GetSettings().KatakanaToggle();
+        if (hk.IsValid() && hk.Matches(vk, ctrl, sh2, altL, altR, win)) {
+            *pfEaten = TRUE; return S_OK;
+        }
     }
     if (ctrl || alt || win) { *pfEaten = FALSE; return S_OK; }
 
@@ -519,11 +527,13 @@ STDMETHODIMP KeyHandler::OnTestKeyDown(ITfContext *pCtx, WPARAM wParam,
 
     // Digits and ASCII punctuation are converted to full-width while the IME
     // is on (handled in OnKeyDown).  Eat them here so TSF doesn't pass through.
-    if ((vk >= '0' && vk <= '9')
-     || vk == VK_OEM_1 || vk == VK_OEM_2 || vk == VK_OEM_3
-     || vk == VK_OEM_4 || vk == VK_OEM_5 || vk == VK_OEM_6
-     || vk == VK_OEM_7 || vk == VK_OEM_PLUS) {
-        *pfEaten = TRUE; return S_OK;
+    if (_pIme->GetSettings().FullWidthAscii()) {
+        if ((vk >= '0' && vk <= '9')
+         || vk == VK_OEM_1 || vk == VK_OEM_2 || vk == VK_OEM_3
+         || vk == VK_OEM_4 || vk == VK_OEM_5 || vk == VK_OEM_6
+         || vk == VK_OEM_7 || vk == VK_OEM_PLUS) {
+            *pfEaten = TRUE; return S_OK;
+        }
     }
 
     // F6 (→ hiragana) / F7 (→ katakana): eat only when composing
@@ -729,23 +739,28 @@ STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
 
     // Modifier-key combinations are app shortcuts — pass them through.
     // (Plain Shift is fine; it's used for shifted Korean jamo like ㅃ.)
+    // LEFT/RIGHT Alt are tracked independently so the user-configured hotkey
+    // can be RAlt-only (e.g. the Korean 한/영 key) without firing on LAlt.
     bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-    bool alt  = (GetKeyState(VK_MENU)    & 0x8000) != 0;
+    bool altL = (GetKeyState(VK_LMENU)   & 0x8000) != 0;
+    bool altR = (GetKeyState(VK_RMENU)   & 0x8000) != 0;
+    bool alt  = altL || altR;
     bool win  = (GetKeyState(VK_LWIN)    & 0x8000) != 0
              || (GetKeyState(VK_RWIN)    & 0x8000) != 0;
 
     // IME-specific shortcut taking precedence over the generic modifier
-    // pass-through:  Ctrl+;  toggles persistent katakana mode.
-    // (Standard JP-IME would use the dedicated カナ key, which Korean
-    // keyboards lack.  F-keys are reserved for the standard one-shot
-    // F6/F7 conversion convention.)
-    if (ctrl && !shifted && !alt && !win && vk == VK_OEM_1) {
-        _pIme->ToggleKatakanaMode();
-        if (!_pIme->PendingKana().empty()) {
-            _pIme->UpdatePreedit(pCtx, BuildPreedit(_pIme, _composer));
+    // pass-through: the user-configured katakana toggle (default RAlt+K).
+    // Lives in %APPDATA%\KorJpnIme\settings.ini under [Hotkeys] KatakanaToggle.
+    {
+        const Settings::Hotkey& hk = _pIme->GetSettings().KatakanaToggle();
+        if (hk.IsValid() && hk.Matches(vk, ctrl, shifted, altL, altR, win)) {
+            _pIme->ToggleKatakanaMode();
+            if (!_pIme->PendingKana().empty()) {
+                _pIme->UpdatePreedit(pCtx, BuildPreedit(_pIme, _composer));
+            }
+            *pfEaten = TRUE;
+            return S_OK;
         }
-        *pfEaten = TRUE;
-        return S_OK;
     }
 
     if (ctrl || alt || win) {
@@ -925,9 +940,9 @@ STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
     }
 
     // Digits and ASCII symbols → full-width (zenkaku) equivalents while the
-    // IME is on.  Standard JP-IME convention: 1 → １, ! → ！, ? → ？, etc.
-    // Plain WM_CHAR mapping for VK 0x30-0x39 (digits) and OEM punctuation.
-    {
+    // IME is on.  Can be disabled via [Behavior] FullWidthAscii = false in
+    // settings.ini (then these keys fall through as plain ASCII).
+    if (_pIme->GetSettings().FullWidthAscii()) {
         wchar_t zen = 0;
         if (vk >= '0' && vk <= '9' && !shifted) {
             zen = static_cast<wchar_t>(0xFF10 + (vk - '0'));   // 0xFF10 = '０'

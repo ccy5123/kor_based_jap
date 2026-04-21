@@ -46,10 +46,10 @@ STDMETHODIMP KorJpnIme::Activate(ITfThreadMgr *pThreadMgr, TfClientId tid) {
     // Wire ourselves to the candidate window so mouse clicks can call back.
     _candidateWindow.SetOwner(this);
 
-    // Lazy-load the kana→kanji dictionary on first activation.
-    // (Subsequent activations in the same DLL instance reuse the loaded data.)
+    // Lazy-load the kana→kanji dictionary + user settings on first activation.
     if (!_dictTried) {
         _dictTried = true;
+        _settings.Load();
         _LoadDictionary();
     }
 
@@ -156,7 +156,9 @@ void KorJpnIme::OnCandidateClicked(int idx) {
 
     if (!sel.empty()) {
         CommitText(pCtxLocal, sel);
-        if (sel != prefix) _userDict.Record(prefix, sel);
+        if (sel != prefix && _settings.UserDictLearn()) {
+            _userDict.Record(prefix, sel);
+        }
     }
 
     // Drop only this candidate's prefix from pending; the rest stays as preedit

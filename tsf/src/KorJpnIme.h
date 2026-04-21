@@ -4,6 +4,7 @@
 #include "UserDict.h"
 #include "CandidateWindow.h"
 #include "KanaConv.h"
+#include "Settings.h"
 #include <string>
 #include <vector>
 
@@ -48,6 +49,9 @@ public:
     // Per-user learning dictionary (user_dict.txt next to the DLL).
     UserDict&       GetUserDict()       { return _userDict; }
     const UserDict& GetUserDict() const { return _userDict; }
+
+    // User settings loaded from %APPDATA%\KorJpnIme\settings.ini
+    const Settings& GetSettings() const { return _settings; }
 
     // Kana accumulation buffer for standard JP-IME-style preedit.
     // KeyHandler appends to this buffer when a syllable completes; Space
@@ -126,6 +130,7 @@ private:
 
     Dictionary      _dict;            // loaded once on first Activate()
     UserDict        _userDict;
+    Settings        _settings;
     bool            _dictTried = false;
     std::wstring    _pendingKana;     // accumulated kana waiting for commit/conversion
     CandidateWindow _candidateWindow;
