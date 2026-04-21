@@ -1,0 +1,90 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly in KorJpnIme.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug!  The more concretely
+        you describe the failing keystroke sequence, the faster we can
+        reproduce and fix.
+
+  - type: input
+    id: version
+    attributes:
+      label: KorJpnIme version
+      description: Visible in the `VERSION` file in your install dir, or in
+                   the release you downloaded.  Example -- `1.0.0`.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: Run `winver` -- copy the first two lines.  Example --
+                   `Windows 11 Pro 23H2 (Build 22631.3007)`.
+      placeholder: "Windows 11 Pro 23H2"
+    validations:
+      required: true
+
+  - type: input
+    id: host-app
+    attributes:
+      label: Host app where the bug occurs
+      description: The application you were typing into -- Notepad,
+                   Word, Chrome address bar, etc.
+      placeholder: "Notepad"
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: |
+        Keystroke-by-keystroke please.  Use Korean jamo characters
+        (ㅇㅗㅗ) or syllables (와타시노) so there's no ambiguity.
+      placeholder: |
+        1. Win+Space to switch to Korean-Japanese IME
+        2. Type `와타시` → preedit shows `わたし`
+        3. Press Space → candidate window pops up
+        4. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What you thought should happen.
+      placeholder: "Top candidate should be 私 because that's by far the most common reading."
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What actually happened.  Screenshots welcome.
+      placeholder: "Top candidate is 渡志野 (rare surname) -- 私 isn't in the first page of candidates."
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Debug log (optional)
+      description: |
+        KorJpnIme writes debug traces to `debug.log` next to the
+        installed DLL (e.g. `C:\Program Files\KorJpnIme\debug.log`)
+        when debug logging is enabled.  Paste the last ~100 lines
+        around the failing keystroke if you have them.
+      render: text
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I logged out and back in after installing / updating.
+        - label: I searched existing issues and didn't find a duplicate.

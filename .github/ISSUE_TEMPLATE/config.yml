@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: README (English)
+    url: https://github.com/ccy5123/kor_based_jap/blob/main/README.md
+    about: Install / build / feature list.
+  - name: README (한국어)
+    url: https://github.com/ccy5123/kor_based_jap/blob/main/README.ko.md
+    about: 설치 / 빌드 / 기능 정리.
+  - name: README (日本語)
+    url: https://github.com/ccy5123/kor_based_jap/blob/main/README.ja.md
+    about: インストール / ビルド / 機能一覧。
+  - name: Release notes
+    url: https://github.com/ccy5123/kor_based_jap/releases/latest
+    about: What's new in the latest release.

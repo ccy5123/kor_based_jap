@@ -1,5 +1,11 @@
 # KorJpnIme — 한국어 키보드로 일본어 입력
 
+[![Release](https://img.shields.io/github/v/release/ccy5123/kor_based_jap?display_name=tag&sort=semver)](https://github.com/ccy5123/kor_based_jap/releases/latest)
+[![License](https://img.shields.io/github/license/ccy5123/kor_based_jap)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/ccy5123/kor_based_jap/tests.yml?branch=main&label=tests)](https://github.com/ccy5123/kor_based_jap/actions/workflows/tests.yml)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)](https://github.com/ccy5123/kor_based_jap/releases/latest)
+[![Stars](https://img.shields.io/github/stars/ccy5123/kor_based_jap?style=social)](https://github.com/ccy5123/kor_based_jap/stargazers)
+
 **한국어 2벌식 키보드 레이아웃**으로 일본어를 입력할 수 있는 Windows TSF
 (Text Services Framework) 입력기입니다. 한국어 음절 (와타시노, 갓코우,
 한바아가아…) 을 치면 KorJpnIme가 일본어 카나로 변환하고, Mozc 수준의

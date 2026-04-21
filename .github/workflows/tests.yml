@@ -1,0 +1,61 @@
+# GitHub Actions: build + run the unit-test suite on every push / PR.
+#
+# Mirrors what tools/build_tests.bat does locally -- compiles the pure
+# (non-COM) translation units (HangulComposer, RichDictionary, Connector,
+# Viterbi) together with the test files, runs the resulting exe.  Exit
+# code 0 iff every assertion passed.
+#
+# We do NOT build the full DLL here; that needs the Mozc data binaries
+# which are gitignored and 71 MB to fetch + regenerate.  The unit suite
+# covers the pure-logic surface that holds the bulk of the bug risk
+# (state machines, batchim rules, viterbi smoke).
+name: tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tsf/src/**'
+      - 'tsf/tests/**'
+      - 'tools/build_tests.bat'
+      - '.github/workflows/tests.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tsf/src/**'
+      - 'tsf/tests/**'
+      - 'tools/build_tests.bat'
+      - '.github/workflows/tests.yml'
+  workflow_dispatch:
+
+jobs:
+  windows-msvc:
+    name: Windows / MSVC
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Compile + run tests
+        shell: cmd
+        run: |
+          mkdir build_tests
+          cd build_tests
+          cl.exe /nologo /std:c++20 /O2 /EHsc /MD ^
+              /D_UNICODE /DUNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
+              /I"%GITHUB_WORKSPACE%\tsf\src" /I"%GITHUB_WORKSPACE%\tsf\generated" /I"%GITHUB_WORKSPACE%" ^
+              "%GITHUB_WORKSPACE%\tsf\tests\test_main.cpp" ^
+              "%GITHUB_WORKSPACE%\tsf\tests\test_hangul_composer.cpp" ^
+              "%GITHUB_WORKSPACE%\tsf\tests\test_batchim_lookup.cpp" ^
+              "%GITHUB_WORKSPACE%\tsf\tests\test_viterbi.cpp" ^
+              "%GITHUB_WORKSPACE%\tsf\src\HangulComposer.cpp" ^
+              "%GITHUB_WORKSPACE%\tsf\src\RichDictionary.cpp" ^
+              "%GITHUB_WORKSPACE%\tsf\src\Connector.cpp" ^
+              "%GITHUB_WORKSPACE%\tsf\src\Viterbi.cpp" ^
+              /Fe:tsf_tests.exe || exit /b 1
+          tsf_tests.exe || exit /b %ERRORLEVEL%

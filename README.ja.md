@@ -1,5 +1,11 @@
 # KorJpnIme — 韓国語キーボードで日本語入力
 
+[![Release](https://img.shields.io/github/v/release/ccy5123/kor_based_jap?display_name=tag&sort=semver)](https://github.com/ccy5123/kor_based_jap/releases/latest)
+[![License](https://img.shields.io/github/license/ccy5123/kor_based_jap)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/ccy5123/kor_based_jap/tests.yml?branch=main&label=tests)](https://github.com/ccy5123/kor_based_jap/actions/workflows/tests.yml)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)](https://github.com/ccy5123/kor_based_jap/releases/latest)
+[![Stars](https://img.shields.io/github/stars/ccy5123/kor_based_jap?style=social)](https://github.com/ccy5123/kor_based_jap/stargazers)
+
 **韓国語 2-beolsik (2 벌식) キーボードレイアウト**で日本語を入力できる
 Windows TSF (Text Services Framework) 入力メソッドです。韓国語の音節
 (와타시노、갓코우、한바아가아…) を入力すると KorJpnIme が日本語かな
