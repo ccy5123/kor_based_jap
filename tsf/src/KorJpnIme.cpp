@@ -81,6 +81,7 @@ STDMETHODIMP KorJpnIme::Deactivate() {
     // Drop any pending kana — we cannot commit it without a context, and the
     // session is going away anyway.  (TODO: commit on focus-loss before deactivate.)
     _pendingKana.clear();
+    if (_inConversion) ExitConversion();
 
     if (_pKeyHandler) {
         _pKeyHandler->Unadvise(_pThreadMgr);

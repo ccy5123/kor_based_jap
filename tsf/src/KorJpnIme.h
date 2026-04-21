@@ -1,7 +1,9 @@
 #pragma once
 #include "Globals.h"
 #include "Dictionary.h"
+#include "CandidateWindow.h"
 #include <string>
+#include <vector>
 
 // Forward declarations
 class KeyHandler;
@@ -48,6 +50,22 @@ public:
     void                AppendKana(const std::wstring& kana) { _pendingKana += kana; }
     void                ClearPending()                         { _pendingKana.clear(); }
 
+    // ---- Kanji conversion mode -------------------------------------------
+    // Enter: dictionary lookup just produced candidates; show the popup and
+    // remember that future Space/arrow/digit keys cycle/select candidates.
+    // Exit: hide the popup; whether to commit a candidate or restore preedit
+    // is decided by the caller.
+    bool IsInConversion() const { return _inConversion; }
+    CandidateWindow& GetCandidateWindow() { return _candidateWindow; }
+    void EnterConversion(const std::vector<std::wstring>& candidates) {
+        _inConversion = true;
+        _candidateWindow.Show(candidates);
+    }
+    void ExitConversion() {
+        _inConversion = false;
+        _candidateWindow.Hide();
+    }
+
 private:
     void _LoadDictionary();   // called once from Activate()
     LONG          _cRef;
@@ -60,7 +78,9 @@ private:
     // expect Japanese output immediately (한자/VK_CONVERT toggles to/from passthrough).
     bool          _active       = true;
 
-    Dictionary    _dict;            // loaded once on first Activate()
-    bool          _dictTried = false;
-    std::wstring  _pendingKana;     // accumulated kana waiting for commit/conversion
+    Dictionary      _dict;            // loaded once on first Activate()
+    bool            _dictTried = false;
+    std::wstring    _pendingKana;     // accumulated kana waiting for commit/conversion
+    CandidateWindow _candidateWindow;
+    bool            _inConversion = false;
 };

@@ -41,6 +41,41 @@ inline wchar_t jongToJamo(int jongIdx) noexcept {
     return (jongIdx >= 0 && jongIdx < 28) ? kJong[jongIdx] : 0;
 }
 
+// ---- Compound-jong split ---------------------------------------------------
+// Korean compound jongseong (ㄳ ㄵ ㄶ ㄺ ㄻ ㄼ ㄽ ㄾ ㄿ ㅀ ㅄ) are TWO consonants
+// stacked.  When a following vowel arrives, the SECOND consonant migrates to
+// become the cho of the next syllable while the FIRST stays as the jong of
+// the current syllable.  For our kana lookup we ALSO want only the first part
+// to contribute the batchim — otherwise compounds like ㄵ have no mapping at
+// all and silently drop the ん (e.g. 칸+ㅈ briefly displayed as か instead of かん).
+
+struct SplitJong { int firstJong; int secondCho; };
+
+inline SplitJong splitCompoundJong(int jongIdx) noexcept {
+    static constexpr struct { int comp; int firstJong; int secondCho; } table[] = {
+        { 3,  1,  9},  // ㄳ → ㄱ + ㅅ
+        { 5,  4, 12},  // ㄵ → ㄴ + ㅈ
+        { 6,  4, 18},  // ㄶ → ㄴ + ㅎ
+        { 9,  8,  0},  // ㄺ → ㄹ + ㄱ
+        {10,  8,  6},  // ㄻ → ㄹ + ㅁ
+        {11,  8,  7},  // ㄼ → ㄹ + ㅂ
+        {12,  8,  9},  // ㄽ → ㄹ + ㅅ
+        {13,  8, 16},  // ㄾ → ㄹ + ㅌ
+        {14,  8, 17},  // ㄿ → ㄹ + ㅍ
+        {15,  8, 18},  // ㅀ → ㄹ + ㅎ
+        {18, 17,  9},  // ㅄ → ㅂ + ㅅ
+    };
+    for (const auto& e : table) {
+        if (e.comp == jongIdx) return {e.firstJong, e.secondCho};
+    }
+    return {-1, -1};
+}
+
+inline int simplifyCompoundJong(int jongIdx) noexcept {
+    SplitJong sj = splitCompoundJong(jongIdx);
+    return sj.firstJong >= 0 ? sj.firstJong : jongIdx;
+}
+
 // ---- Batchim suffix --------------------------------------------------------
 // Returns the kana suffix for a final consonant (jong) given what follows.
 //
@@ -59,8 +94,16 @@ inline wchar_t jongToJamo(int jongIdx) noexcept {
 inline std::wstring suffix(int jongIdx, wchar_t nextJamo) {
     if (jongIdx == 0) return L"";
 
+    // Compound jong: only the first part contributes the kana batchim — the
+    // second part will be re-emitted as the next syllable's cho when a vowel
+    // arrives.  Without this, ㄵ/ㄶ/etc. drop the ん entirely.
+    int simplified = simplifyCompoundJong(jongIdx);
+    if (simplified != jongIdx) {
+        return suffix(simplified, nextJamo);
+    }
+
     wchar_t j = jongToJamo(jongIdx);
-    if (j == 0) return L"";  // compound jong not yet fully handled → silent
+    if (j == 0) return L"";  // jongToJamo guard (shouldn't trigger for valid indices)
 
     // 1. hatsuon → ん
     if (batchim_rules::is_hatsuon(j))

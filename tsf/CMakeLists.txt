@@ -12,8 +12,9 @@ add_library(KorJpnIme SHARED
     src/KorJpnIme.cpp
     src/KeyHandler.cpp
     src/Composition.cpp
-    src/Dictionary.cpp     # kana→kanji lookup loaded from dict/jpn_dict.txt
-    src/pthread_stub.cpp   # Win32 FLS stubs — eliminates libwinpthread-1.dll dependency
+    src/Dictionary.cpp        # kana→kanji lookup loaded from dict/jpn_dict.txt
+    src/CandidateWindow.cpp   # Win32 popup showing kanji candidates
+    src/pthread_stub.cpp      # Win32 FLS stubs — eliminates libwinpthread-1.dll dependency
 )
 
 # Module definition file — controls exported symbols (DllMain etc.)
@@ -35,6 +36,7 @@ target_include_directories(KorJpnIme PRIVATE
 # ---------------------------------------------------------------------------
 target_link_libraries(KorJpnIme PRIVATE
     ole32 oleaut32 advapi32 uuid
+    user32 gdi32                # CandidateWindow (Win32 window + GDI text)
 )
 
 target_compile_definitions(KorJpnIme PRIVATE

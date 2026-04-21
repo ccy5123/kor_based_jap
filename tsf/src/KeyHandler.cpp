@@ -2,7 +2,10 @@
 #include "KorJpnIme.h"
 #include "Composition.h"
 #include "BatchimLookup.h"  // includes mapping_table.h + batchim_rules.h
+#include "Dictionary.h"
+#include "CandidateWindow.h"
 #include "DebugLog.h"
+#include <algorithm>
 
 // ============================================================================
 // Katakana conversion helpers
@@ -249,13 +252,33 @@ std::wstring HangulComposer::input(wchar_t jamo) {
         int vi = jungIndex(jamo);
 
         if (vi >= 0) {
-            // Vowel: the current jong splits off to become the cho of the next syllable.
-            // Try compound vowel with nothing first (no prev vowel before jong).
-            // Emit syllable WITHOUT jong, jong becomes new syllable's cho.
+            // Vowel arriving with a jong present — the jong "migrates" to be
+            // the cho of the next syllable.
+
+            // Compound jong (ㄳ ㄵ ㄶ ㄺ ㄻ ㄼ ㄽ ㄾ ㄿ ㅀ ㅄ): keep the FIRST
+            // part as the jong of the current syllable, and use the SECOND
+            // part as the cho of the new syllable.  Bug fixed: previously this
+            // case fell through to silent ㅇ, turning 칹+ㅣ into かい instead
+            // of かんじ.
+            batchim::SplitJong sj = batchim::splitCompoundJong(_jong);
+            if (sj.firstJong >= 0 && sj.secondCho >= 0) {
+                _jong    = sj.firstJong;
+                _rawJong = kJong[sj.firstJong];
+                wchar_t syllable = compose();    // 칸 (with reduced jong)
+                std::wstring out(1, syllable);
+                reset();
+                _cho     = sj.secondCho;
+                _jung    = vi;
+                _rawJung = jamo;
+                return out;
+            }
+
+            // Single jong: choFromJong gives the migrating cho, current
+            // syllable emits without jong (e.g. 칸 → 카 + 나).
             int newCho = choFromJong(_jong);
             if (newCho < 0) {
-                // Compound jong like ㄳ — split: keep first part as jong, second as new cho
-                // For simplicity in this skeleton, emit whole syllable and restart
+                // Truly unknown jong (shouldn't happen for valid input) —
+                // fall back to silent ㅇ as last resort.
                 wchar_t syllable = compose();
                 std::wstring out(1, syllable);
                 reset();
@@ -265,7 +288,6 @@ std::wstring HangulComposer::input(wchar_t jamo) {
                 return out;
             }
 
-            // Emit syllable without jong
             int savedJong = _jong;
             wchar_t savedRawJong = _rawJong;
             _jong    = -1;
@@ -273,7 +295,6 @@ std::wstring HangulComposer::input(wchar_t jamo) {
             wchar_t syllable = compose();
             std::wstring out(1, syllable);
 
-            // New syllable: newCho + incoming vowel
             reset();
             _cho     = newCho;
             _jung    = vi;
@@ -424,6 +445,19 @@ STDMETHODIMP KeyHandler::OnTestKeyDown(ITfContext *pCtx, WPARAM wParam,
         return S_OK;
     }
 
+    // While the candidate window is up we eat navigation / selection / commit
+    // keys so OnKeyDown can drive the conversion UI.
+    if (_pIme->IsInConversion()) {
+        if (vk == VK_SPACE  || vk == VK_TAB   || vk == VK_RETURN
+         || vk == VK_ESCAPE || vk == VK_UP    || vk == VK_DOWN
+         || (vk >= '1' && vk <= '9')) {
+            *pfEaten = TRUE; return S_OK;
+        }
+        // Anything else: also eat (we'll commit selection then re-process key
+        // — the key event still needs to reach OnKeyDown).
+        *pfEaten = TRUE; return S_OK;
+    }
+
     // Modifier-key combinations (Ctrl+X, Alt+X, Win+X) belong to the host
     // application as shortcuts — never eat them.  Plain Shift is allowed
     // because it's part of normal Korean jamo input (e.g. Shift+Q → ㅃ).
@@ -509,6 +543,44 @@ static bool FlushAndCommit(KorJpnIme *pIme, HangulComposer& composer, ITfContext
     return true;
 }
 
+// Try to start kanji conversion: lookup _pendingKana in the dictionary, and
+// if there are candidates, show the candidate window and switch to conversion
+// mode.  Returns true if conversion started; false if there's nothing to
+// convert (caller should fall back to plain commit).
+static bool TryStartConversion(KorJpnIme *pIme, HangulComposer& composer) {
+    // Flush any in-progress syllable into pending so the lookup uses the full word.
+    std::wstring tail = composer.flush();
+    if (!tail.empty()) AppendKanaFor(pIme, tail[0], 0);
+
+    const std::wstring& pending = pIme->PendingKana();
+    if (pending.empty()) return false;
+
+    const Dictionary *dict = pIme->GetDictionary();
+    if (!dict) return false;
+
+    std::vector<std::wstring> candidates = dict->Lookup(pending);
+    // Always offer the raw kana as the LAST candidate (if not already there).
+    if (std::find(candidates.begin(), candidates.end(), pending) == candidates.end()) {
+        candidates.push_back(pending);
+    }
+    if (candidates.empty()) return false;
+
+    pIme->EnterConversion(candidates);
+    return true;
+}
+
+// Commit the currently selected candidate from the candidate window, clear
+// the pending buffer, and exit conversion mode.
+static void CommitSelectedCandidate(KorJpnIme *pIme, ITfContext *pCtx) {
+    std::wstring sel = pIme->GetCandidateWindow().GetSelected();
+    if (!sel.empty()) {
+        pIme->CommitText(pCtx, sel);
+    }
+    pIme->ClearPending();
+    pIme->UpdatePreedit(pCtx, L"");
+    pIme->ExitConversion();
+}
+
 // @MX:ANCHOR: OnKeyDown is the main dispatch for all Korean key processing
 // @MX:REASON: Everything — composition, preedit update, kana lookup — flows through here
 STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
@@ -586,20 +658,63 @@ STDMETHODIMP KeyHandler::OnKeyDown(ITfContext *pCtx, WPARAM wParam,
         return S_OK;
     }
 
-    // ---- Space / Enter / Tab: commit accumulated preedit ------------------
-    // Standard JP-IME behaviour: when there's nothing to commit, pass the key
-    // through (regular space, newline, tab); when there IS preedit, commit it
-    // and EAT the space (Space is a commit signal, not whitespace), but pass
-    // Enter/Tab through after committing (typical JP-IME convention).
-    if (vk == VK_SPACE || vk == VK_RETURN || vk == VK_TAB) {
-        bool hadComposing =
-            !_composer.empty() || !_pIme->PendingKana().empty();
-        FlushAndCommit(_pIme, _composer, pCtx);
-        if (vk == VK_SPACE && hadComposing) {
-            *pfEaten = TRUE;        // Space ate as commit trigger
-        } else {
-            *pfEaten = FALSE;       // Enter/Tab/Space-no-preedit pass through
+    // ---- CONVERSION MODE keys ---------------------------------------------
+    // When the candidate window is up the only keys we honour are navigation
+    // and selection; everything else commits the current selection first and
+    // then falls through to be processed against an empty composer.
+    if (_pIme->IsInConversion()) {
+        CandidateWindow& cw = _pIme->GetCandidateWindow();
+        if (vk == VK_SPACE || vk == VK_TAB || vk == VK_DOWN) {
+            cw.SelectNext();
+            *pfEaten = TRUE; return S_OK;
         }
+        if (vk == VK_UP) {
+            cw.SelectPrev();
+            *pfEaten = TRUE; return S_OK;
+        }
+        if (vk >= '1' && vk <= '9') {
+            int idx = vk - '1';
+            if (idx < cw.Count()) {
+                cw.SetSelectedIndex(idx);
+                CommitSelectedCandidate(_pIme, pCtx);
+                *pfEaten = TRUE; return S_OK;
+            }
+            // 6..9 with fewer candidates → ignore for now
+            *pfEaten = TRUE; return S_OK;
+        }
+        if (vk == VK_RETURN) {
+            CommitSelectedCandidate(_pIme, pCtx);
+            *pfEaten = TRUE; return S_OK;
+        }
+        if (vk == VK_ESCAPE) {
+            // Cancel conversion — keep the kana preedit so user can keep typing.
+            _pIme->ExitConversion();
+            _pIme->UpdatePreedit(pCtx, BuildPreedit(_pIme, _composer));
+            *pfEaten = TRUE; return S_OK;
+        }
+        // Anything else: commit current selection and let the key be re-processed
+        // by the normal path below (so e.g. typing a new jamo starts a new word).
+        CommitSelectedCandidate(_pIme, pCtx);
+        // fall through
+    }
+
+    // ---- Space / Enter / Tab: commit accumulated preedit ------------------
+    // Space tries to enter kanji conversion first (if there's a pending kana
+    // word); Enter / Tab commit raw without conversion.
+    if (vk == VK_SPACE) {
+        bool hadComposing = !_composer.empty() || !_pIme->PendingKana().empty();
+        if (hadComposing && TryStartConversion(_pIme, _composer)) {
+            *pfEaten = TRUE; return S_OK;
+        }
+        FlushAndCommit(_pIme, _composer, pCtx);
+        *pfEaten = hadComposing ? TRUE : FALSE;
+        return S_OK;
+    }
+    if (vk == VK_RETURN || vk == VK_TAB) {
+        bool hadComposing = !_composer.empty() || !_pIme->PendingKana().empty();
+        FlushAndCommit(_pIme, _composer, pCtx);
+        (void)hadComposing;
+        *pfEaten = FALSE;       // pass Enter/Tab through after commit
         return S_OK;
     }
 
