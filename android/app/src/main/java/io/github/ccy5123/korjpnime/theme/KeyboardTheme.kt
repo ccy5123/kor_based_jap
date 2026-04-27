@@ -5,6 +5,14 @@ import androidx.compose.ui.graphics.Color
 
 enum class KeyboardMode { BEOLSIK, CHEONJIIN }
 
+/**
+ * Light / dark resolution policy.  AUTO follows the system setting (the
+ * usual default); LIGHT / DARK pin the keyboard regardless of system
+ * preference — useful when the user prefers a fixed look that won't
+ * flicker as the OS theme switches at sunset.
+ */
+enum class ThemeMode { AUTO, LIGHT, DARK }
+
 enum class KeyShape { ROUNDED, PILL, FLAT, SQUIRCLE }
 
 enum class StripTreatment { CHIP, UNDERLINE, HAIRLINE, FLUSH }

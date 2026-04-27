@@ -3,6 +3,7 @@ package io.github.ccy5123.korjpnime.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,8 +14,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -32,19 +36,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.ccy5123.korjpnime.data.KeyboardPreferences
+import io.github.ccy5123.korjpnime.theme.DIRECTIONS
+import io.github.ccy5123.korjpnime.theme.Direction
 import io.github.ccy5123.korjpnime.theme.KeyboardMode
+import io.github.ccy5123.korjpnime.theme.ThemeMode
+import io.github.ccy5123.korjpnime.theme.tokens
 import kotlinx.coroutines.launch
 
 /**
- * Settings UI — D3 / M1 closeout scope.
+ * Settings UI — covers everything wired through DataStore so far:
  *
- * Two settings live here:
- *   - **한글 키보드 레이아웃** picker (두벌식 ↔ 천지인) with mini-preview cards
- *   - **진동** toggle (haptic feedback on key tap)
+ *  - **한글 키보드 레이아웃**: 두벌식 ↔ 천지인
+ *  - **테마**: 5 design directions (Stratus / Persimmon / Hinoki /
+ *    Slate / Iris) sourced from `theme/KeyboardTheme.kt`'s `DIRECTIONS`
+ *  - **다크 모드**: 자동 / 라이트 / 다크
+ *  - **진동** toggle (haptic feedback on key tap)
  *
- * Theme / Japanese-candidate count rows are reserved for M4 polish (see
- * `docs/ANDROID_PLAN.md`); we don't pre-render their UI to avoid promising
- * features that aren't wired.
+ * The screen scrolls because direction + mode + dark + haptic together
+ * exceed a typical phone's portrait viewport once the cards are sized
+ * for tap targets.
  */
 @Composable
 fun SettingsScreen(onClose: () -> Unit) {
@@ -53,12 +63,17 @@ fun SettingsScreen(onClose: () -> Unit) {
 
     val mode by KeyboardPreferences.modeFlow(context)
         .collectAsState(initial = KeyboardMode.BEOLSIK)
+    val directionId by KeyboardPreferences.directionFlow(context)
+        .collectAsState(initial = KeyboardPreferences.DEFAULT_DIRECTION_ID)
+    val themeMode by KeyboardPreferences.themeModeFlow(context)
+        .collectAsState(initial = ThemeMode.AUTO)
     val haptics by KeyboardPreferences.hapticsFlow(context)
         .collectAsState(initial = true)
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 16.dp),
     ) {
         Header(onClose = onClose)
@@ -84,6 +99,29 @@ fun SettingsScreen(onClose: () -> Unit) {
         )
 
         Spacer(Modifier.height(28.dp))
+        SectionLabel("테마")
+        Spacer(Modifier.height(10.dp))
+
+        DirectionPicker(
+            directionId = directionId,
+            dark = (themeMode == ThemeMode.DARK),
+            onSelect = { id ->
+                scope.launch { KeyboardPreferences.setDirection(context, id) }
+            },
+        )
+
+        Spacer(Modifier.height(20.dp))
+        SectionLabel("다크 모드")
+        Spacer(Modifier.height(10.dp))
+
+        ThemeModeSegmented(
+            current = themeMode,
+            onChange = { newMode ->
+                scope.launch { KeyboardPreferences.setThemeMode(context, newMode) }
+            },
+        )
+
+        Spacer(Modifier.height(28.dp))
         SectionLabel("입력 피드백")
         Spacer(Modifier.height(10.dp))
 
@@ -93,11 +131,128 @@ fun SettingsScreen(onClose: () -> Unit) {
             checked = haptics,
             onChange = { scope.launch { KeyboardPreferences.setHaptics(context, it) } },
         )
+
+        Spacer(Modifier.height(32.dp))
     }
 
-    // Surface the keyboard mode preview placeholder — keeps the screen lively
-    // even before C wires Cheonjiin's state machine.
-    LaunchedEffect(Unit) { /* no-op; placeholder for future side effects */ }
+    LaunchedEffect(Unit) { /* placeholder for future side effects */ }
+}
+
+@Composable
+private fun DirectionPicker(
+    directionId: String,
+    dark: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        for (dir in DIRECTIONS) {
+            DirectionCard(
+                direction = dir,
+                selected = dir.id == directionId,
+                dark = dark,
+                onClick = { onSelect(dir.id) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun DirectionCard(
+    direction: Direction,
+    selected: Boolean,
+    dark: Boolean,
+    onClick: () -> Unit,
+) {
+    val tokens = tokens(direction.palette, dark)
+    val borderColor = if (selected) tokens.accent else Color(0xFFE0E0E0)
+    val borderWidth = if (selected) 2.dp else 1.dp
+
+    Column(
+        modifier = Modifier
+            .width(108.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .border(borderWidth, borderColor, RoundedCornerShape(12.dp))
+            .background(tokens.sheet)
+            .clickable(onClick = onClick)
+            .padding(10.dp),
+        horizontalAlignment = Alignment.Start,
+    ) {
+        // Mini key sample — uses the direction's actual shape + colors so the
+        // card itself previews what the keyboard will look like.
+        val keyShape = when (direction.shape) {
+            io.github.ccy5123.korjpnime.theme.KeyShape.PILL -> RoundedCornerShape(999.dp)
+            io.github.ccy5123.korjpnime.theme.KeyShape.SQUIRCLE -> RoundedCornerShape(10.dp)
+            io.github.ccy5123.korjpnime.theme.KeyShape.FLAT -> RoundedCornerShape(0.dp)
+            io.github.ccy5123.korjpnime.theme.KeyShape.ROUNDED -> RoundedCornerShape(6.dp)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            repeat(3) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 22.dp, height = 18.dp)
+                        .clip(keyShape)
+                        .background(if (it == 1) tokens.accent else tokens.key),
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = direction.name,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = tokens.ink,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = direction.palette.name,
+            fontSize = 10.sp,
+            color = tokens.inkSoft,
+        )
+    }
+}
+
+@Composable
+private fun ThemeModeSegmented(
+    current: ThemeMode,
+    onChange: (ThemeMode) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFFF0F0F0))
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        for ((mode, label) in listOf(
+            ThemeMode.AUTO to "자동",
+            ThemeMode.LIGHT to "라이트",
+            ThemeMode.DARK to "다크",
+        )) {
+            val selected = current == mode
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(if (selected) Color.White else Color.Transparent)
+                    .clickable { onChange(mode) }
+                    .padding(vertical = 9.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = label,
+                    fontSize = 13.sp,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (selected) Color(0xFF222222) else Color(0xFF6B6B6B),
+                )
+            }
+        }
+    }
 }
 
 @Composable

@@ -8,6 +8,7 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -33,6 +34,7 @@ import io.github.ccy5123.korjpnime.keyboard.KeyAction
 import io.github.ccy5123.korjpnime.keyboard.KeyboardSurface
 import io.github.ccy5123.korjpnime.theme.DIRECTIONS
 import io.github.ccy5123.korjpnime.theme.KeyboardMode
+import io.github.ccy5123.korjpnime.theme.ThemeMode
 import io.github.ccy5123.korjpnime.ui.SettingsActivity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -155,11 +157,24 @@ class KorJpnImeService :
         return KorJpnImeView(context = this, owner = this) {
             val mode by KeyboardPreferences.modeFlow(applicationContext)
                 .collectAsState(initial = KeyboardMode.BEOLSIK)
+            val directionId by KeyboardPreferences.directionFlow(applicationContext)
+                .collectAsState(initial = KeyboardPreferences.DEFAULT_DIRECTION_ID)
+            val themeMode by KeyboardPreferences.themeModeFlow(applicationContext)
+                .collectAsState(initial = ThemeMode.AUTO)
             val candidateList by candidates.collectAsState()
+
+            val direction = DIRECTIONS.firstOrNull { it.id == directionId } ?: DIRECTIONS.first()
+            val systemDark = isSystemInDarkTheme()
+            val dark = when (themeMode) {
+                ThemeMode.AUTO -> systemDark
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
+            }
+
             MaterialTheme {
                 KeyboardSurface(
-                    direction = DIRECTIONS.first(),
-                    dark = false,
+                    direction = direction,
+                    dark = dark,
                     mode = mode,
                     candidates = candidateList,
                     onCandidatePick = ::handleCandidatePick,

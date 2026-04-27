@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import io.github.ccy5123.korjpnime.theme.KeyboardMode
+import io.github.ccy5123.korjpnime.theme.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -28,6 +29,11 @@ object KeyboardPreferences {
 
     private val MODE_KEY = stringPreferencesKey("keyboard_mode")
     private val HAPTICS_KEY = booleanPreferencesKey("haptics_enabled")
+    private val DIRECTION_KEY = stringPreferencesKey("theme_direction")
+    private val THEME_MODE_KEY = stringPreferencesKey("theme_mode")
+
+    /** Default theme direction id — d1 Stratus (cool blue, rounded, chip strip). */
+    const val DEFAULT_DIRECTION_ID = "d1"
 
     /** Stream of the current keyboard layout mode.  Defaults to 두벌식. */
     fun modeFlow(context: Context): Flow<KeyboardMode> =
@@ -48,5 +54,29 @@ object KeyboardPreferences {
 
     suspend fun setHaptics(context: Context, enabled: Boolean) {
         context.dataStore.edit { it[HAPTICS_KEY] = enabled }
+    }
+
+    /** Stream of the user's selected theme direction id (`d1`..`d5`). */
+    fun directionFlow(context: Context): Flow<String> =
+        context.dataStore.data.map { prefs ->
+            prefs[DIRECTION_KEY] ?: DEFAULT_DIRECTION_ID
+        }
+
+    suspend fun setDirection(context: Context, directionId: String) {
+        context.dataStore.edit { it[DIRECTION_KEY] = directionId }
+    }
+
+    /** Stream of the user's light / dark / auto preference. */
+    fun themeModeFlow(context: Context): Flow<ThemeMode> =
+        context.dataStore.data.map { prefs ->
+            when (prefs[THEME_MODE_KEY]) {
+                ThemeMode.LIGHT.name -> ThemeMode.LIGHT
+                ThemeMode.DARK.name -> ThemeMode.DARK
+                else -> ThemeMode.AUTO
+            }
+        }
+
+    suspend fun setThemeMode(context: Context, mode: ThemeMode) {
+        context.dataStore.edit { it[THEME_MODE_KEY] = mode.name }
     }
 }
