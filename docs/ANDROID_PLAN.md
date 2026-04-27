@@ -145,18 +145,20 @@ Android-only additions, not derived from any TSF source file:
 
 ## New-session bootstrap
 
-Paste this as the first message of the new session, fill in the two
-blanks:
+Open Claude Code at `C:\dev\kor_based_jap` (Windows native — that's
+where Android Studio reads from; the WSL worktree is no longer the
+source of truth), then paste:
 
 ```
-이전 세션에서 Windows TSF용 한국어 키보드 → 일본어 IME (KorJpnIme v1.0.0) 를 완성했어.
-repo: https://github.com/ccy5123/kor_based_jap
-Android port plan은 docs/ANDROID_PLAN.md 에 정리해둠.
+이전 세션에서 Android M1 의 키보드 UI 까지 완성했어.
+repo: https://github.com/ccy5123/kor_based_jap (작업 경로 C:\dev\kor_based_jap)
+폰: Galaxy Note20 Ultra 5G, Android 13
+픽한 design direction: d1 Stratus (cool blue, rounded square, chip strip)
+ANDROID_PLAN.md 의 M1 체크리스트에서 키보드 view + 14개 @Preview 까지 ✓.
 
-이제 Android M1 시작.
-
-내 환경:
-- Android Studio: [있음/없음, 버전]
-- 테스트: [실기 / 에뮬레이터 / 둘다]
-- Compose 경험: [없음/조금/많음]
+다음으로 D2 — IME 가 실제로 폰에서 동작하게:
+- KorJpnImeService.onCreateInputView() 에 ComposeView 호스팅
+  (lifecycle / SavedStateRegistry / ViewModelStore owner 셋업 포함)
+- 키 탭 → InputConnection.commitText (raw 자모 출력만; 한글 합성은 D3)
+- Note20 Ultra 에 sideload + 메모장에서 입력 검증
 ```
