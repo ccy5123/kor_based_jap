@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">KorJpnIme</string>
+    <string name="ime_label">한국어 → 日本語</string>
+    <string name="enable_ime_hint">설정 → 시스템 → 언어 및 입력 → 화면 키보드 에서 KorJpnIme 를 활성화하세요</string>
+</resources>

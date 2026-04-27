@@ -22,6 +22,7 @@ rather than silently deviating in code.
 | Repo layout | **Same repo, `android/` subfolder** | Single source of truth for shared assets (`dict/`, `mapping/`); Windows + Android release tags can diverge |
 | Dictionary distribution | **Bundle in APK** for v1 (jpn_dict.txt, ~18 MB) | Zero-network install, modest APK growth.  Defer kj_*.bin (~71 MB) until users ask |
 | Distribution channel | **GitHub Releases (signed APK)** for beta → Google Play after stabilization | Iterate fast without Play store review; Play later for discoverability |
+| Input methods | **2-beolsik (두벌식) + Cheonjiin (천지인)** | Two-beolsik covers desktop-typist users (matches the Windows TSF version); Cheonjiin is the default mobile Korean input on Samsung phones — Note20-class users would expect it.  User picks one of the two layouts in **Settings → 입력 방식 → 한글 키보드 레이아웃**; the keyboard surface itself shows no mode toggle (decision from 2026-04-27 Claude Design session — "most users settle on one layout for life; on-keyboard toggle wastes a slot, adds noise, risks accidental swaps mid-message"). Selection persisted in DataStore |
 
 ## Milestones
 
@@ -32,15 +33,30 @@ type Korean jamo, see hiragana committed.  No kanji conversion yet.
 
 - [ ] Android Studio project skeleton under `android/`
 - [ ] AndroidManifest registers an `InputMethodService`
-- [ ] Compose-based 2-beolsik keyboard view (32 jamo keys + Shift /
-      Backspace / Space / Enter / Switch-IME)
+- [ ] Compose-based **2-beolsik** keyboard view (32 jamo keys + Shift /
+      Backspace / Space / Enter / function row with !#1 / globe /
+      `,` / `.`)
+- [ ] Compose-based **천지인 (Cheonjiin)** keyboard view (3×4 grid:
+      9 consonant-group keys + ㅣ ㆍ ㅡ vowel column + Backspace /
+      Space / Enter / globe)
+- [ ] **Cheonjiin state machine** (NEW — no Windows ancestor):
+      multi-tap consonant cycling (ㄱ→ㅋ→ㄲ etc.), vowel composition
+      (ㅣ + ㆍ → ㅏ etc.), tap-timeout reset.  Output: jamo stream
+      that feeds the same HangulComposer downstream
+- [ ] **Settings screen** (Compose) — 입력 방식 page with 한글 키보드
+      레이아웃 picker: two ModeCards (두벌식 / 천지인) with mini-preview
+      and radio selection, plus Japanese candidates / Theme / Haptics
+      rows.  This is the *only* place the user switches modes
+- [ ] User mode preference persisted via DataStore (default 두벌식;
+      Settings card flips it)
 - [ ] Port `tsf/src/HangulComposer.cpp` (~400 LOC) to Kotlin verbatim
+      — shared by both modes
 - [ ] Port `tsf/src/BatchimLookup.h` (~200 LOC) to Kotlin
 - [ ] Port the syllable-table generator output to a Kotlin `Map`
       (or load `mapping/syllables.yaml` at build time)
 - [ ] On every committed Korean syllable, look up the kana and
       `InputConnection.commitText` it
-- [ ] Sideload + smoke-test in any text field
+- [ ] Sideload + smoke-test in any text field (verify both modes)
 
 ### M2 -- "Kanji conversion via the simple dict"
 
@@ -96,11 +112,27 @@ Things that don't port (Windows-specific):
 - `ITfDisplayAttributeProvider` (Compose handles preedit styling)
 - `regsvr32` / `install_tip.reg` (replace with APK install)
 
+## Files to author from scratch (no Windows ancestor)
+
+Android-only additions, not derived from any TSF source file:
+
+| File | LOC est. | Notes |
+|---|---:|---|
+| `CheonjiinStateMachine.kt` | ~200 | Multi-tap consonant cycling + vowel composition (ㅣ/ㆍ/ㅡ → all vowels); tap-timeout reset; outputs the same jamo stream HangulComposer expects |
+| `CheonjiinLayout.kt` | ~100 | 3×4 Compose grid; large keys for one-handed thumb reach |
+| `BeolsikLayout.kt` | ~150 | 4×11 Compose grid for the standard 두벌식 layout |
+| `KeyboardModePreference.kt` | ~50 | DataStore-backed `KeyboardMode` enum (BEOLSIK / CHEONJIIN); observes mode flow |
+| `SettingsScreen.kt` | ~250 | Settings activity Compose screen with mode picker (two ModeCards w/ mini-preview), Japanese-candidates row, theme row, haptics toggle |
+| `OklchColor.kt` | ~50 | Single-hue OKLCH → sRGB conversion for the design's parametric token system |
+| `KeyboardTheme.kt` | ~150 | `DirectionPalette` + `tokens(palette, dark)` returning 11 colour tokens (ports the Claude Design `tokens()` function) |
+
 ## UI design notes
 
-- **Reference IMEs**: Gboard (Korean / Japanese), SwiftKey, Google JP
-  IME on Android, Mozc Android.  Look at key sizing, candidate strip
-  placement, theme switch UX.
+- **Reference IMEs**: Gboard (Korean / Japanese, both 두벌식 and
+  12-key 천지인 modes), Samsung Keyboard (천지인 default on Note-class
+  phones), SwiftKey, Google JP IME on Android, Mozc Android.  Look at
+  key sizing, candidate strip placement, theme switch UX, and how the
+  두벌식 ↔ 천지인 mode toggle is surfaced.
 - **Touch target**: 48dp minimum (Material Accessibility); keys can
   be larger.  Keep gutters wide enough for thumbs.
 - **Layout**: portrait + landscape both.  Landscape can show a wider
@@ -113,18 +145,20 @@ Things that don't port (Windows-specific):
 
 ## New-session bootstrap
 
-Paste this as the first message of the new session, fill in the two
-blanks:
+Open Claude Code at `C:\dev\kor_based_jap` (Windows native — that's
+where Android Studio reads from; the WSL worktree is no longer the
+source of truth), then paste:
 
 ```
-이전 세션에서 Windows TSF용 한국어 키보드 → 일본어 IME (KorJpnIme v1.0.0) 를 완성했어.
-repo: https://github.com/ccy5123/kor_based_jap
-Android port plan은 docs/ANDROID_PLAN.md 에 정리해둠.
+이전 세션에서 Android M1 의 키보드 UI 까지 완성했어.
+repo: https://github.com/ccy5123/kor_based_jap (작업 경로 C:\dev\kor_based_jap)
+폰: Galaxy Note20 Ultra 5G, Android 13
+픽한 design direction: d1 Stratus (cool blue, rounded square, chip strip)
+ANDROID_PLAN.md 의 M1 체크리스트에서 키보드 view + 14개 @Preview 까지 ✓.
 
-이제 Android M1 시작.
-
-내 환경:
-- Android Studio: [있음/없음, 버전]
-- 테스트: [실기 / 에뮬레이터 / 둘다]
-- Compose 경험: [없음/조금/많음]
+다음으로 D2 — IME 가 실제로 폰에서 동작하게:
+- KorJpnImeService.onCreateInputView() 에 ComposeView 호스팅
+  (lifecycle / SavedStateRegistry / ViewModelStore owner 셋업 포함)
+- 키 탭 → InputConnection.commitText (raw 자모 출력만; 한글 합성은 D3)
+- Note20 Ultra 에 sideload + 메모장에서 입력 검증
 ```
