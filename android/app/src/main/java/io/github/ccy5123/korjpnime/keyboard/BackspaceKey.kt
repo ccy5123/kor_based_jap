@@ -62,6 +62,12 @@ fun RowScope.BackspaceKey(
         delay(INITIAL_HOLD_MS)
         var interval = REPEAT_START_MS
         while (isActive) {
+            // Match the press-down haptic on every auto-repeat tick so the
+            // user feels each delete (otherwise the held-backspace stream
+            // is silent after the initial press).
+            if (hapticsEnabled) {
+                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            }
             onTriggerBackspace()
             delay(interval)
             if (interval > REPEAT_FLOOR_MS) {

@@ -6,6 +6,19 @@ import androidx.compose.ui.graphics.Color
 enum class KeyboardMode { BEOLSIK, CHEONJIIN }
 
 /**
+ * Input-language mode — cycled by the 한/영/일 toggle key on the letters
+ * page.  Determines:
+ *   - SpaceKey label (한국어 / Eng. / 日本語)
+ *   - Symbol page content (Korean ASCII vs Japanese full-width)
+ *   - Whether digit Commits get full-width-ified at the service boundary
+ *
+ * For now letter output behaviour stays "Korean jamo → Japanese kana"
+ * regardless of mode — actual per-mode letter output (Korean hangul mode,
+ * English QWERTY mode) lands in a follow-up.
+ */
+enum class InputLanguage { KOREAN, ENGLISH, JAPANESE }
+
+/**
  * Light / dark resolution policy.  AUTO follows the system setting (the
  * usual default); LIGHT / DARK pin the keyboard regardless of system
  * preference — useful when the user prefers a fixed look that won't

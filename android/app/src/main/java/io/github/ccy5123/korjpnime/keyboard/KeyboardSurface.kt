@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.github.ccy5123.korjpnime.theme.Direction
+import io.github.ccy5123.korjpnime.theme.InputLanguage
 import io.github.ccy5123.korjpnime.theme.KeyboardMode
 import io.github.ccy5123.korjpnime.theme.tokens
 
@@ -35,6 +36,8 @@ fun KeyboardSurface(
     mode: KeyboardMode,
     modifier: Modifier = Modifier,
     heightDp: Int = 360,
+    inputLanguage: InputLanguage = InputLanguage.JAPANESE,
+    onLanguageCycle: () -> Unit = {},
     candidates: List<String> = emptyList(),
     onCandidatePick: (String) -> Unit = {},
     onAction: (KeyAction) -> Unit = {},
@@ -65,9 +68,11 @@ fun KeyboardSurface(
             when (mode) {
                 KeyboardMode.BEOLSIK -> BeolsikLayout(
                     tokens = tokens, shape = direction.shape, onAction = onAction,
+                    inputLanguage = inputLanguage, onLanguageCycle = onLanguageCycle,
                 )
                 KeyboardMode.CHEONJIIN -> CheonjiinLayout(
                     tokens = tokens, shape = direction.shape, onAction = onAction,
+                    inputLanguage = inputLanguage, onLanguageCycle = onLanguageCycle,
                 )
             }
             if (expanded && candidates.isNotEmpty()) {

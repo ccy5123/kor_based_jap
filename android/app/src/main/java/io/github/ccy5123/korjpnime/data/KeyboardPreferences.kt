@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import io.github.ccy5123.korjpnime.theme.InputLanguage
 import io.github.ccy5123.korjpnime.theme.KeyboardMode
 import io.github.ccy5123.korjpnime.theme.ThemeMode
 import kotlinx.coroutines.flow.Flow
@@ -33,6 +34,7 @@ object KeyboardPreferences {
     private val DIRECTION_KEY = stringPreferencesKey("theme_direction")
     private val THEME_MODE_KEY = stringPreferencesKey("theme_mode")
     private val HEIGHT_KEY = intPreferencesKey("keyboard_height_dp")
+    private val INPUT_LANG_KEY = stringPreferencesKey("input_language")
 
     /** Default theme direction id — d1 Stratus (cool blue, rounded, chip strip). */
     const val DEFAULT_DIRECTION_ID = "d1"
@@ -104,5 +106,23 @@ object KeyboardPreferences {
         context.dataStore.edit {
             it[HEIGHT_KEY] = dp.coerceIn(MIN_HEIGHT_DP, MAX_HEIGHT_DP)
         }
+    }
+
+    /**
+     * Stream of the current input-language mode.  Defaults to JAPANESE —
+     * matches the IME's primary purpose (Korean Beolsik input → Japanese
+     * kana output) so first-launch behaviour stays unchanged.
+     */
+    fun inputLanguageFlow(context: Context): Flow<InputLanguage> =
+        context.dataStore.data.map { prefs ->
+            when (prefs[INPUT_LANG_KEY]) {
+                InputLanguage.KOREAN.name -> InputLanguage.KOREAN
+                InputLanguage.ENGLISH.name -> InputLanguage.ENGLISH
+                else -> InputLanguage.JAPANESE
+            }
+        }
+
+    suspend fun setInputLanguage(context: Context, lang: InputLanguage) {
+        context.dataStore.edit { it[INPUT_LANG_KEY] = lang.name }
     }
 }

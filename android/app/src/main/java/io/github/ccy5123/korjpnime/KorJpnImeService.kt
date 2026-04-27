@@ -4,6 +4,7 @@ import android.content.Intent
 import android.inputmethodservice.InputMethodService
 import android.os.Build
 import android.view.HapticFeedbackConstants
+import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -35,6 +36,7 @@ import io.github.ccy5123.korjpnime.keyboard.KeyAction
 import io.github.ccy5123.korjpnime.keyboard.KeyboardSurface
 import io.github.ccy5123.korjpnime.keyboard.LocalHapticsEnabled
 import io.github.ccy5123.korjpnime.theme.DIRECTIONS
+import io.github.ccy5123.korjpnime.theme.InputLanguage
 import io.github.ccy5123.korjpnime.theme.KeyboardMode
 import io.github.ccy5123.korjpnime.theme.ThemeMode
 import io.github.ccy5123.korjpnime.ui.SettingsActivity
@@ -84,6 +86,14 @@ class KorJpnImeService :
      * written from the lifecycleScope coroutine.
      */
     @Volatile private var hapticsEnabled: Boolean = true
+
+    /**
+     * Latest input-language mode cached from [KeyboardPreferences.inputLanguageFlow].
+     * Read by [digitsToFullWidth] to gate ASCII→full-width conversion (only
+     * fires in JAPANESE mode).  @Volatile for the same reason as
+     * [hapticsEnabled].
+     */
+    @Volatile private var inputLanguage: InputLanguage = InputLanguage.JAPANESE
 
     /**
      * Kana → kanji dictionary, loaded once asynchronously from
@@ -138,6 +148,9 @@ class KorJpnImeService :
             KeyboardPreferences.hapticsFlow(applicationContext).collect { hapticsEnabled = it }
         }
         lifecycleScope.launch {
+            KeyboardPreferences.inputLanguageFlow(applicationContext).collect { inputLanguage = it }
+        }
+        lifecycleScope.launch {
             // Async dict load — ~19 MB, takes ~200 ms on Note20 first run.
             // Candidates stay empty until this completes.
             dictionary.load(applicationContext)
@@ -167,6 +180,8 @@ class KorJpnImeService :
                 .collectAsState(initial = true)
             val heightDp by KeyboardPreferences.heightFlow(applicationContext)
                 .collectAsState(initial = KeyboardPreferences.DEFAULT_HEIGHT_DP)
+            val inputLang by KeyboardPreferences.inputLanguageFlow(applicationContext)
+                .collectAsState(initial = InputLanguage.JAPANESE)
             val candidateList by candidates.collectAsState()
 
             val direction = DIRECTIONS.firstOrNull { it.id == directionId } ?: DIRECTIONS.first()
@@ -184,6 +199,8 @@ class KorJpnImeService :
                         dark = dark,
                         mode = mode,
                         heightDp = heightDp,
+                        inputLanguage = inputLang,
+                        onLanguageCycle = ::cycleInputLanguage,
                         candidates = candidateList,
                         onCandidatePick = ::handleCandidatePick,
                         onAction = ::handleAction,
@@ -282,6 +299,24 @@ class KorJpnImeService :
         refreshCandidates()
     }
 
+    /**
+     * Cycle the input-language preference 한 → 영 → 일 → 한.  Triggered by
+     * the dedicated cycle button on the letters page (replaces the prior 2-
+     * state 한/영 toggle).  The UI re-renders via the inputLanguageFlow
+     * collectAsState; symbol page content + space-bar label switch in lockstep.
+     */
+    private fun cycleInputLanguage() {
+        val current = inputLanguage
+        val next = when (current) {
+            InputLanguage.KOREAN -> InputLanguage.ENGLISH
+            InputLanguage.ENGLISH -> InputLanguage.JAPANESE
+            InputLanguage.JAPANESE -> InputLanguage.KOREAN
+        }
+        lifecycleScope.launch {
+            KeyboardPreferences.setInputLanguage(applicationContext, next)
+        }
+    }
+
     private fun openSettings() {
         val intent = Intent(this, SettingsActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -373,8 +408,10 @@ class KorJpnImeService :
             KeyAction.Backspace -> handleBackspace(ic)
             KeyAction.Enter -> { batched(ic) { flushComposerInner(ic) }; handleEnter() }
             KeyAction.SwitchIme -> { batched(ic) { flushComposerInner(ic) }; switchIme() }
+            KeyAction.CursorLeft -> { batched(ic) { flushComposerInner(ic) }; sendCursor(ic, KeyEvent.KEYCODE_DPAD_LEFT) }
+            KeyAction.CursorRight -> { batched(ic) { flushComposerInner(ic) }; sendCursor(ic, KeyEvent.KEYCODE_DPAD_RIGHT) }
             KeyAction.Shift -> Unit       // BeolsikLayout owns the Shift state; service receives the action only for haptic
-            KeyAction.Symbols -> Unit     // future milestone
+            KeyAction.Symbols -> Unit     // page state lives in the layout composables
         }
     }
 
@@ -577,19 +614,29 @@ class KorJpnImeService :
 
     /**
      * Convert ASCII digits to full-width Japanese counterparts (０..９,
-     * U+FF10..U+FF19).  Applied in [handleCommit]'s non-jamo branch so
-     * every digit the user types in our IME's Japanese-output context
-     * gets the Japanese-correct width.  Non-digit chars pass through
-     * unchanged.  No-op when there are no ASCII digits.
+     * U+FF10..U+FF19) **only** when the current [inputLanguage] is JAPANESE.
+     * KOREAN / ENGLISH modes pass digits through as ASCII.  Non-digit chars
+     * pass through unchanged in all modes.
      */
     private fun digitsToFullWidth(text: String): String {
         if (text.isEmpty()) return text
+        if (inputLanguage != InputLanguage.JAPANESE) return text
         if (!text.any { it in '0'..'9' }) return text
         val sb = StringBuilder(text.length)
         for (c in text) {
             sb.append(if (c in '0'..'9') (c.code - '0'.code + 0xFF10).toChar() else c)
         }
         return sb.toString()
+    }
+
+    /**
+     * Move the editor caret one step in the requested direction.  Uses the
+     * standard DPAD key event which every editor honours; setSelection would
+     * also work but requires querying current selection first.
+     */
+    private fun sendCursor(ic: InputConnection, keyCode: Int) {
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
     }
 
     /**
