@@ -23,12 +23,17 @@ import androidx.savedstate.SavedStateRegistryOwner
 import io.github.ccy5123.korjpnime.data.KeyboardPreferences
 import io.github.ccy5123.korjpnime.engine.BatchimLookup
 import io.github.ccy5123.korjpnime.engine.CheonjiinComposer
+import io.github.ccy5123.korjpnime.engine.Dictionary
 import io.github.ccy5123.korjpnime.engine.HangulComposer
+import io.github.ccy5123.korjpnime.engine.UserDict
 import io.github.ccy5123.korjpnime.keyboard.KeyAction
 import io.github.ccy5123.korjpnime.keyboard.KeyboardSurface
 import io.github.ccy5123.korjpnime.theme.DIRECTIONS
 import io.github.ccy5123.korjpnime.theme.KeyboardMode
 import io.github.ccy5123.korjpnime.ui.SettingsActivity
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -73,6 +78,30 @@ class KorJpnImeService :
      */
     @Volatile private var hapticsEnabled: Boolean = true
 
+    /**
+     * Kana → kanji dictionary, loaded once asynchronously from
+     * `assets/jpn_dict.txt` in [onCreate].  Null candidates while loading.
+     */
+    private val dictionary = Dictionary()
+
+    /**
+     * Per-kana user pick history (SharedPreferences-backed).  Lazy because
+     * SharedPreferences needs a Context — initialised once [onCreate] runs.
+     */
+    private lateinit var userDict: UserDict
+
+    /**
+     * Run of consecutive hiragana characters most recently committed to the
+     * editor.  Updated by [emit] / [onCharsDeleted]; reset on any non-kana
+     * commit, on candidate selection, on backspace into committed text past
+     * the run, and on external clears.  This is what [refreshCandidates]
+     * looks up against the dictionary.
+     */
+    private var currentKanaRun: String = ""
+
+    private val _candidates = MutableStateFlow<List<String>>(emptyList())
+    val candidates: StateFlow<List<String>> = _candidates.asStateFlow()
+
     override val lifecycle: Lifecycle get() = lifecycleRegistry
     override val viewModelStore: ViewModelStore get() = store
     override val savedStateRegistry: SavedStateRegistry
@@ -83,11 +112,18 @@ class KorJpnImeService :
         savedStateRegistryController.performAttach()
         savedStateRegistryController.performRestore(null)
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
+        userDict = UserDict(applicationContext)
         // Cache haptics preference for handleAction's sync read.  Mode is read
         // directly via collectAsState in onCreateInputView's composable since
         // that path is already async-friendly.
         lifecycleScope.launch {
             KeyboardPreferences.hapticsFlow(applicationContext).collect { hapticsEnabled = it }
+        }
+        lifecycleScope.launch {
+            // Async dict load — ~19 MB, takes ~200 ms on Note20 first run.
+            // Candidates stay empty until this completes.
+            dictionary.load(applicationContext)
+            refreshCandidates()  // in case kana was already committed pre-load
         }
     }
 
@@ -96,16 +132,98 @@ class KorJpnImeService :
         return KorJpnImeView(context = this, owner = this) {
             val mode by KeyboardPreferences.modeFlow(applicationContext)
                 .collectAsState(initial = KeyboardMode.BEOLSIK)
+            val candidateList by candidates.collectAsState()
             MaterialTheme {
                 KeyboardSurface(
                     direction = DIRECTIONS.first(),
                     dark = false,
                     mode = mode,
+                    candidates = candidateList,
+                    onCandidatePick = ::handleCandidatePick,
                     onAction = ::handleAction,
                     onSettingsClick = ::openSettings,
                 )
             }
         }
+    }
+
+    /**
+     * Commit [text] to the editor and update the kana-run tracker.  All
+     * commit paths route through here so [currentKanaRun] / [candidates]
+     * stay in sync with the editor's actual content.
+     */
+    private fun emit(ic: InputConnection, text: String) {
+        if (text.isEmpty()) return
+        ic.commitText(text, 1)
+        if (isAllHiragana(text)) {
+            currentKanaRun += text
+        } else {
+            // Non-hiragana terminator (kana mixed with kanji / punct / digit /
+            // English / etc.).  Run breaks; subsequent kana starts fresh.
+            currentKanaRun = ""
+        }
+        refreshCandidates()
+    }
+
+    /** True if every char in [s] is hiragana (U+3040..U+309F). */
+    private fun isAllHiragana(s: String): Boolean = s.isNotEmpty() && s.all { it.code in 0x3040..0x309F }
+
+    /** Update [currentKanaRun] after [count] chars deleted from the editor. */
+    private fun onCharsDeleted(count: Int) {
+        if (currentKanaRun.isEmpty() || count <= 0) return
+        currentKanaRun = if (count >= currentKanaRun.length) "" else currentKanaRun.dropLast(count)
+        refreshCandidates()
+    }
+
+    private fun refreshCandidates() {
+        if (currentKanaRun.isEmpty()) {
+            _candidates.value = emptyList()
+            return
+        }
+        val combined = LinkedHashSet<String>()
+        // 1. User pick history (most-recent-first).
+        combined.addAll(userDict.getUserCandidates(currentKanaRun))
+        // 2. Static dictionary candidates (most-frequent-first), capped to
+        //    leave room for the katakana + hiragana fallbacks below — even
+        //    when a high-frequency kana like あい has many kanji entries.
+        if (dictionary.isLoaded) {
+            val dictBudget = (MAX_CANDIDATES - 2).coerceAtLeast(0)
+            combined.addAll(dictionary.lookup(currentKanaRun).take(dictBudget))
+        }
+        // 3. Auto-katakana fallback — guaranteed slot regardless of dict size.
+        val katakana = hiraganaToKatakana(currentKanaRun)
+        if (katakana != currentKanaRun) combined.add(katakana)
+        // 4. Raw hiragana stay-as-is.
+        combined.add(currentKanaRun)
+        _candidates.value = combined.toList().take(MAX_CANDIDATES)
+    }
+
+    /** Hiragana (U+3041..U+3096) → Katakana (U+30A1..U+30F6) by +0x60 shift. */
+    private fun hiraganaToKatakana(s: String): String {
+        val sb = StringBuilder(s.length)
+        for (c in s) {
+            sb.append(if (c.code in 0x3041..0x3096) (c.code + 0x60).toChar() else c)
+        }
+        return sb.toString()
+    }
+
+    /**
+     * Replace the recent kana run with the user-picked kanji.  Wrapped in a
+     * batch so the delete + commit pair applies atomically.  Records the
+     * pick in [UserDict] so the same kana surfaces this kanji first next
+     * time.
+     */
+    private fun handleCandidatePick(kanji: String) {
+        val ic = currentInputConnection ?: return
+        val pickedFromKana = currentKanaRun
+        if (pickedFromKana.isEmpty()) return
+        userDict.recordPick(pickedFromKana, kanji)
+        batched(ic) {
+            ic.deleteSurroundingText(pickedFromKana.length, 0)
+            ic.commitText(kanji, 1)
+        }
+        currentKanaRun = ""
+        refreshCandidates()
     }
 
     private fun openSettings() {
@@ -122,17 +240,23 @@ class KorJpnImeService :
         // shouldn't) call commitText ourselves.  Earlier we did, which leaked
         // the trailing preedit ("요") into the next field after KakaoTalk's
         // external clear-on-send.
-        composer.reset()
-        cheonjiin.reset()
+        resetAllState()
         super.onFinishInputView(finishingInput)
     }
 
     override fun onFinishInput() {
         // True end of input session (target field is gone).  Belt-and-suspenders
         // reset for cases where onFinishInputView didn't fire.
+        resetAllState()
+        super.onFinishInput()
+    }
+
+    /** Drop composer / Cheonjiin / kana-run state and clear candidates. */
+    private fun resetAllState() {
         composer.reset()
         cheonjiin.reset()
-        super.onFinishInput()
+        currentKanaRun = ""
+        refreshCandidates()
     }
 
     override fun onUpdateSelection(
@@ -154,8 +278,7 @@ class KorJpnImeService :
         // its leftover (cho, jung, jong) into a fresh context (the bug that
         // produced "요감사합니다").
         if (!composer.empty() && candidatesStart < 0) {
-            composer.reset()
-            cheonjiin.reset()
+            resetAllState()
         }
     }
 
@@ -197,15 +320,19 @@ class KorJpnImeService :
     }
 
     /**
-     * Space behaviour:
+     * Space behaviour, layered (each takes precedence over the next):
      *
-     *  - If Cheonjiin is mid-consonant-cycle (e.g., user just tapped ㄴ for
-     *    안's jong and is about to tap ㄴ again for 녕's cho), Space acts as
-     *    a cycle-break only — no editor change, no haptic side effects beyond
-     *    the one already fired.  This is what lets `안녕` be typed without an
-     *    intervening literal space.
-     *  - Otherwise (vowel buffer or empty), Space behaves as a regular space:
-     *    flush any pending hangul and commit a literal space.
+     *  1. Cheonjiin mid-consonant-cycle (e.g., user just tapped ㄴ for 안's
+     *     jong and may tap ㄴ again for 녕's cho): break the cycle window,
+     *     no editor change.  Lets `안녕` be typed without an intervening
+     *     literal space.
+     *  2. Hangul composer non-empty (preedit shown): flush only — commit the
+     *     pending kana (e.g., 루 → る) without inserting a literal space.
+     *     Mirrors standard Japanese IME convention where Space converts /
+     *     finalises the in-progress reading and the user picks a candidate
+     *     next.  Tapping Space again (now with composer empty) inserts the
+     *     literal space.
+     *  3. Both empty: literal space.
      */
     private fun handleSpace(ic: InputConnection) {
         if (cheonjiin.isInConsonantCycle()) {
@@ -213,10 +340,11 @@ class KorJpnImeService :
             return
         }
         cheonjiin.reset()
-        batched(ic) {
-            flushComposerInner(ic)
-            ic.commitText(" ", 1)
+        if (!composer.empty()) {
+            batched(ic) { flushComposerInner(ic) }
+            return
         }
+        batched(ic) { emit(ic, " ") }
     }
 
     /**
@@ -233,11 +361,12 @@ class KorJpnImeService :
                 when (op) {
                     is CheonjiinComposer.PunctOp.Insert -> {
                         flushComposerInner(ic)
-                        ic.commitText(op.c.toString(), 1)
+                        emit(ic, op.c.toString())
                     }
                     is CheonjiinComposer.PunctOp.Replace -> {
                         ic.deleteSurroundingText(1, 0)
-                        ic.commitText(op.next.toString(), 1)
+                        onCharsDeleted(1)
+                        emit(ic, op.next.toString())
                     }
                 }
             }
@@ -264,7 +393,10 @@ class KorJpnImeService :
                 return
             }
         }
-        handleCjOps(ic, cheonjiin.tapVowel(stroke, System.currentTimeMillis()))
+        handleCjOps(
+            ic,
+            cheonjiin.tapVowel(stroke, System.currentTimeMillis(), composer.currentRawJung()),
+        )
     }
 
     /**
@@ -299,7 +431,7 @@ class KorJpnImeService :
                     is CheonjiinComposer.Op.Emit -> composer.input(op.jamo).also { finalized ->
                         if (finalized.isNotEmpty()) {
                             val kana = convertHangulToKana(finalized, composer.currentChoJamo())
-                            ic.commitText(kana, 1)
+                            emit(ic, kana)
                         }
                     }
                 }
@@ -334,8 +466,7 @@ class KorJpnImeService :
         if (expected.isEmpty()) return
         val actual = ic.getTextBeforeCursor(expected.length, 0)?.toString() ?: return
         if (actual != expected) {
-            composer.reset()
-            cheonjiin.reset()
+            resetAllState()
         }
     }
 
@@ -363,7 +494,7 @@ class KorJpnImeService :
                 val finalized = composer.input(text[0])
                 if (finalized.isNotEmpty()) {
                     val kana = convertHangulToKana(finalized, composer.currentChoJamo())
-                    ic.commitText(kana, 1)
+                    emit(ic, kana)
                 }
                 // Preedit shows the in-progress Hangul syllable so the user
                 // sees what they're typing; the kana commit happens once the
@@ -373,7 +504,7 @@ class KorJpnImeService :
                 // Punctuation, digits, kana, anything non-jamo — flush
                 // in-progress syllable first so it commits BEFORE the new text.
                 flushComposerInner(ic)
-                ic.commitText(text, 1)
+                emit(ic, text)
             }
         }
     }
@@ -406,6 +537,7 @@ class KorJpnImeService :
                 ic.setComposingText(composer.preedit(), 1)
             } else {
                 ic.deleteSurroundingText(1, 0)
+                onCharsDeleted(1)
             }
         }
     }
@@ -421,7 +553,7 @@ class KorJpnImeService :
         val flushed = composer.flush()
         if (flushed.isNotEmpty()) {
             val kana = convertHangulToKana(flushed, ' ')
-            ic.commitText(kana, 1)
+            emit(ic, kana)
         }
     }
 
@@ -434,7 +566,7 @@ class KorJpnImeService :
             action == EditorInfo.IME_ACTION_UNSPECIFIED ||
             flagNoEnter
         ) {
-            ic.commitText("\n", 1)
+            emit(ic, "\n")
         } else {
             ic.performEditorAction(action)
         }
@@ -447,5 +579,11 @@ class KorJpnImeService :
             val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
             imm.showInputMethodPicker()
         }
+    }
+
+    companion object {
+        // Enough to fill several scrolls + room for the expanded panel.
+        // Beyond this users want the full grid view (vertical expand).
+        private const val MAX_CANDIDATES = 32
     }
 }

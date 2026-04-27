@@ -98,9 +98,27 @@ class CheonjiinComposer {
 
     /**
      * Process a vowel-stroke key tap.  [stroke] must be one of ㅣ ㆍ ㅡ.
+     *
+     * [composerVowel] is the host HangulComposer's current rawJung — passed
+     * so the state machine can adopt it as a Concrete buffer when our own
+     * buffer was wiped by an external event (most commonly: backspace
+     * peeling a jong off, leaving the composer with cho+jung exposed but no
+     * Cheonjiin state to extend the vowel from).  Pass NUL/' ' when the
+     * composer has no jung set.
      */
-    fun tapVowel(stroke: Char, nowMs: Long): List<Op> {
+    fun tapVowel(stroke: Char, nowMs: Long, composerVowel: Char = ' '): List<Op> {
         decayBufferIfStale(nowMs)
+
+        // Recover from a None buffer when composer still holds a vowel —
+        // otherwise typing 신 → backspace → 시, then ㆍ would be stuck on
+        // 시 (DotIntermediate just accumulates without ever extending the
+        // exposed ㅣ → ㅏ).  Only adopt vowels that have an extension rule
+        // in [extendUndoEmit]; for others, falling through to a fresh empty
+        // buffer matches the user's expectation that ㅗ/ㅛ/etc. are "done".
+        if (buffer == Buffer.None && composerVowel in EXTENDABLE_VOWELS) {
+            buffer = Buffer.Vowel.Concrete(composerVowel)
+        }
+
         lastTapMs = nowMs
 
         // If we were in a consonant / punct cycle, that prior emit is now
@@ -279,6 +297,12 @@ class CheonjiinComposer {
         const val STROKE_I: Char = 'ㅣ'
         const val STROKE_DOT: Char = 'ㆍ'  // U+318D, Hangul archaic letter areah
         const val STROKE_EU: Char = 'ㅡ'
+
+        /**
+         * Vowels we can extend on a follow-up stroke.  Used by [tapVowel]'s
+         * adopt-on-empty branch — only these have entries in [extendUndoEmit].
+         */
+        private val EXTENDABLE_VOWELS = setOf('ㅣ', 'ㅡ', 'ㅏ', 'ㅓ', 'ㅑ', 'ㅕ', 'ㅜ')
 
         /** Cheonjiin consonant cycles, keyed by visual primary. */
         val CONSONANT_CYCLES: Map<Char, List<Char>> = mapOf(

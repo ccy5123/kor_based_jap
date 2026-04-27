@@ -7,6 +7,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.github.ccy5123.korjpnime.theme.Direction
@@ -29,10 +34,16 @@ fun KeyboardSurface(
     dark: Boolean,
     mode: KeyboardMode,
     modifier: Modifier = Modifier,
+    candidates: List<String> = emptyList(),
+    onCandidatePick: (String) -> Unit = {},
     onAction: (KeyAction) -> Unit = {},
     onSettingsClick: (() -> Unit)? = null,
 ) {
     val tokens = tokens(direction.palette, dark)
+    var expanded by remember { mutableStateOf(false) }
+    // Auto-collapse when candidates clear (user picked, run reset, etc.)
+    LaunchedEffect(candidates) { if (candidates.isEmpty()) expanded = false }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -40,7 +51,15 @@ fun KeyboardSurface(
             .background(tokens.sheet),
     ) {
         TopChrome(tokens = tokens, onSettingsClick = onSettingsClick)
-        CandidateStrip(tokens = tokens, treatment = direction.strip)
+        CandidateStrip(
+            tokens = tokens,
+            treatment = direction.strip,
+            candidates = candidates,
+            onPick = onCandidatePick,
+            onExpand = if (candidates.isNotEmpty()) {
+                { expanded = !expanded }
+            } else null,
+        )
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             when (mode) {
                 KeyboardMode.BEOLSIK -> BeolsikLayout(
@@ -48,6 +67,17 @@ fun KeyboardSurface(
                 )
                 KeyboardMode.CHEONJIIN -> CheonjiinLayout(
                     tokens = tokens, shape = direction.shape, onAction = onAction,
+                )
+            }
+            if (expanded && candidates.isNotEmpty()) {
+                ExpandedCandidatesPanel(
+                    tokens = tokens,
+                    candidates = candidates,
+                    onPick = {
+                        onCandidatePick(it)
+                        expanded = false
+                    },
+                    onClose = { expanded = false },
                 )
             }
         }
