@@ -1,6 +1,7 @@
 package io.github.ccy5123.korjpnime.keyboard
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,7 +23,10 @@ import androidx.compose.ui.unit.sp
 import io.github.ccy5123.korjpnime.theme.KeyShape
 import io.github.ccy5123.korjpnime.theme.KeyboardTokens
 
-/** Single keyboard key. Visual only — no input wiring (D2). */
+/**
+ * Single keyboard key. [onClick] is fired on tap-up; pass null in @Preview
+ * to keep the surface inert.
+ */
 @Composable
 fun RowScope.Key(
     tokens: KeyboardTokens,
@@ -34,6 +38,7 @@ fun RowScope.Key(
     fn: Boolean = false,
     accent: Boolean = false,
     pressed: Boolean = false,
+    onClick: (() -> Unit)? = null,
     content: (@Composable () -> Unit)? = null,
 ) {
     val radius = when (shape) {
@@ -59,7 +64,8 @@ fun RowScope.Key(
         modifier = Modifier
             .weight(weight)
             .fillMaxHeight()
-            .let { if (flat) it.divider(tokens.hairline) else it.clip(RoundedCornerShape(radius)).background(bg) },
+            .let { if (flat) it.divider(tokens.hairline) else it.clip(RoundedCornerShape(radius)).background(bg) }
+            .let { if (onClick != null) it.clickable(onClick = onClick) else it },
         contentAlignment = Alignment.Center,
     ) {
         when {

@@ -1,6 +1,7 @@
 package io.github.ccy5123.korjpnime.keyboard
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +32,7 @@ private val ROW3 = listOf("ㅋ", "ㅌ", "ㅊ", "ㅍ", "ㅠ", "ㅜ", "ㅡ")
 fun BeolsikLayout(
     tokens: KeyboardTokens,
     shape: KeyShape,
+    onAction: (KeyAction) -> Unit = {},
 ) {
     val gap = if (shape == KeyShape.FLAT) 0 else 4
     val pad = if (shape == KeyShape.FLAT) 0 else 6
@@ -46,7 +48,9 @@ fun BeolsikLayout(
             horizontalArrangement = Arrangement.spacedBy(gap.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ROW1.forEach { Key(tokens, shape, label = it) }
+            ROW1.forEach { jamo ->
+                Key(tokens, shape, label = jamo, onClick = { onAction(KeyAction.Commit(jamo)) })
+            }
         }
         Row(
             modifier = Modifier.fillMaxWidth().weight(1f),
@@ -54,7 +58,9 @@ fun BeolsikLayout(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             JamoSpacer(weight = 0.5f)
-            ROW2.forEach { Key(tokens, shape, label = it) }
+            ROW2.forEach { jamo ->
+                Key(tokens, shape, label = jamo, onClick = { onAction(KeyAction.Commit(jamo)) })
+            }
             JamoSpacer(weight = 0.5f)
         }
         Row(
@@ -62,11 +68,13 @@ fun BeolsikLayout(
             horizontalArrangement = Arrangement.spacedBy(gap.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Key(tokens, shape, weight = 1.4f, fn = true) {
+            Key(tokens, shape, weight = 1.4f, fn = true, onClick = { onAction(KeyAction.Shift) }) {
                 ShiftIcon(color = tokens.inkSoft)
             }
-            ROW3.forEach { Key(tokens, shape, label = it) }
-            Key(tokens, shape, weight = 1.4f, fn = true) {
+            ROW3.forEach { jamo ->
+                Key(tokens, shape, label = jamo, onClick = { onAction(KeyAction.Commit(jamo)) })
+            }
+            Key(tokens, shape, weight = 1.4f, fn = true, onClick = { onAction(KeyAction.Backspace) }) {
                 BackspaceIcon(color = tokens.inkSoft)
             }
         }
@@ -75,14 +83,18 @@ fun BeolsikLayout(
             horizontalArrangement = Arrangement.spacedBy(gap.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Key(tokens, shape, weight = 1.3f, fn = true, label = "!#1")
-            Key(tokens, shape, weight = 1.3f, fn = true) {
+            Key(tokens, shape, weight = 1.3f, fn = true, label = "!#1",
+                onClick = { onAction(KeyAction.Symbols) })
+            Key(tokens, shape, weight = 1.3f, fn = true, onClick = { onAction(KeyAction.SwitchIme) }) {
                 GlobeIcon(color = tokens.inkSoft)
             }
-            Key(tokens, shape, weight = 0.7f, fn = true, label = ",")
-            SpaceKey(tokens = tokens, shape = shape, weight = 3.5f)
-            Key(tokens, shape, weight = 0.7f, fn = true, label = ".")
-            Key(tokens, shape, weight = 1.3f, accent = true) {
+            Key(tokens, shape, weight = 0.7f, fn = true, label = ",",
+                onClick = { onAction(KeyAction.Commit(",")) })
+            SpaceKey(tokens = tokens, shape = shape, weight = 3.5f,
+                onClick = { onAction(KeyAction.Space) })
+            Key(tokens, shape, weight = 0.7f, fn = true, label = ".",
+                onClick = { onAction(KeyAction.Commit(".")) })
+            Key(tokens, shape, weight = 1.3f, accent = true, onClick = { onAction(KeyAction.Enter) }) {
                 EnterIcon(color = tokens.onAccent)
             }
         }
@@ -99,6 +111,7 @@ internal fun RowScope.SpaceKey(
     tokens: KeyboardTokens,
     shape: KeyShape,
     weight: Float = 3.5f,
+    onClick: (() -> Unit)? = null,
 ) {
     val radius = when (shape) {
         KeyShape.ROUNDED -> 8.dp
@@ -114,7 +127,8 @@ internal fun RowScope.SpaceKey(
             .let {
                 if (flat) it.background(Color.Transparent) else
                     it.clip(RoundedCornerShape(radius)).background(tokens.key)
-            },
+            }
+            .let { if (onClick != null) it.clickable(onClick = onClick) else it },
         contentAlignment = Alignment.Center,
     ) {
         Text(

@@ -58,6 +58,7 @@ private val GRID: List<List<CjCell>> = listOf(
 fun CheonjiinLayout(
     tokens: KeyboardTokens,
     shape: KeyShape,
+    onAction: (KeyAction) -> Unit = {},
 ) {
     val gap = if (shape == KeyShape.FLAT) 0 else 5
     val pad = if (shape == KeyShape.FLAT) 0 else 8
@@ -76,22 +77,36 @@ fun CheonjiinLayout(
             ) {
                 row.forEach { cell ->
                     when (cell) {
-                        is CjCell.Vowel -> Key(tokens, shape, label = cell.label)
+                        is CjCell.Vowel -> Key(
+                            tokens, shape, label = cell.label,
+                            onClick = { onAction(KeyAction.Commit(cell.label)) },
+                        )
+                        // D2: emit primary jamo only; multi-tap cycling is D3.
                         is CjCell.ConsonantGroup -> Key(
                             tokens, shape,
                             double = cell.primary to cell.secondary,
+                            onClick = { onAction(KeyAction.Commit(cell.primary)) },
                         )
-                        is CjCell.Plain -> Key(tokens, shape, fn = true, label = cell.label)
-                        CjCell.Backspace -> Key(tokens, shape, fn = true) {
-                            BackspaceIcon(color = tokens.inkSoft)
-                        }
-                        CjCell.Enter -> Key(tokens, shape, fn = true) {
-                            EnterIcon(color = tokens.inkSoft)
-                        }
-                        CjCell.Globe -> Key(tokens, shape, fn = true) {
-                            GlobeIcon(color = tokens.inkSoft)
-                        }
-                        CjCell.Space -> SpaceKey(tokens = tokens, shape = shape, weight = 1f)
+                        is CjCell.Plain -> Key(
+                            tokens, shape, fn = true, label = cell.label,
+                            onClick = { onAction(KeyAction.Symbols) },
+                        )
+                        CjCell.Backspace -> Key(
+                            tokens, shape, fn = true,
+                            onClick = { onAction(KeyAction.Backspace) },
+                        ) { BackspaceIcon(color = tokens.inkSoft) }
+                        CjCell.Enter -> Key(
+                            tokens, shape, fn = true,
+                            onClick = { onAction(KeyAction.Enter) },
+                        ) { EnterIcon(color = tokens.inkSoft) }
+                        CjCell.Globe -> Key(
+                            tokens, shape, fn = true,
+                            onClick = { onAction(KeyAction.SwitchIme) },
+                        ) { GlobeIcon(color = tokens.inkSoft) }
+                        CjCell.Space -> SpaceKey(
+                            tokens = tokens, shape = shape, weight = 1f,
+                            onClick = { onAction(KeyAction.Space) },
+                        )
                     }
                 }
             }
