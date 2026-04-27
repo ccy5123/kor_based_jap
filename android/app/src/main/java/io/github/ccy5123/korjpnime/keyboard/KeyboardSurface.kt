@@ -13,11 +13,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import io.github.ccy5123.korjpnime.theme.Direction
 import io.github.ccy5123.korjpnime.theme.InputLanguage
 import io.github.ccy5123.korjpnime.theme.KeyboardMode
-import io.github.ccy5123.korjpnime.theme.tokens
+import io.github.ccy5123.korjpnime.theme.resolveTokens
 
 /**
  * Full keyboard: top chrome + candidate strip + key grid for the selected mode.
@@ -43,7 +44,7 @@ fun KeyboardSurface(
     onAction: (KeyAction) -> Unit = {},
     onSettingsClick: (() -> Unit)? = null,
 ) {
-    val tokens = tokens(direction.palette, dark)
+    val tokens = resolveTokens(direction, dark, LocalContext.current)
     var expanded by remember { mutableStateOf(false) }
     // Auto-collapse when candidates clear (user picked, run reset, etc.)
     LaunchedEffect(candidates) { if (candidates.isEmpty()) expanded = false }

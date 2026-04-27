@@ -1,5 +1,9 @@
 package io.github.ccy5123.korjpnime.theme
 
+import android.content.Context
+import android.os.Build
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 
@@ -66,7 +70,15 @@ val DIRECTIONS: List<Direction> = listOf(
         "Neutral gray · squircle keys · minimal flush strip"),
     Direction("d5", "Iris", Palettes.Purple, KeyShape.PILL, StripTreatment.CHIP,
         "Vibrant purple · pill keys · chip candidates"),
+    // Material You — colours derived from the system's dynamic palette
+    // on Android 12+.  Pre-Android 12 falls back to a Stratus-like blue
+    // since the dynamic API isn't available.  See [resolveTokens].
+    Direction("d6", "System", Palettes.Blue, KeyShape.ROUNDED, StripTreatment.CHIP,
+        "Material You · system dynamic colors (Android 12+)"),
 )
+
+/** Direction id reserved for Material You — checked at token-resolve time. */
+const val MATERIAL_YOU_DIRECTION_ID = "d6"
 
 @Immutable
 data class KeyboardTokens(
@@ -82,6 +94,51 @@ data class KeyboardTokens(
     val onAccent: Color,
     val hairline: Color,
 )
+
+/**
+ * Resolve the keyboard token set for a [direction] under the requested
+ * [dark] mode.  Material You direction (id == [MATERIAL_YOU_DIRECTION_ID])
+ * routes to [materialYouTokens] on Android 12+; everything else (and
+ * pre-Android 12) uses the static [tokens] palette mapping.
+ */
+fun resolveTokens(direction: Direction, dark: Boolean, context: Context): KeyboardTokens {
+    val dynamicSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    if (direction.id == MATERIAL_YOU_DIRECTION_ID && dynamicSupported) {
+        return materialYouTokens(context, dark)
+    }
+    return tokens(direction.palette, dark)
+}
+
+/**
+ * Map Android 12+ dynamic [androidx.compose.material3.ColorScheme] (the
+ * system wallpaper-derived palette) onto our [KeyboardTokens].  Slot
+ * choices:
+ *   - `sheet` ← surface (the keyboard chrome)
+ *   - `strip` ← surfaceVariant (candidate strip — a hair off the chrome)
+ *   - `key` ← surfaceContainerHigh / surface (regular key bg)
+ *   - `keyAlt` ← surfaceContainerHighest (function-row keys)
+ *   - `keyPress` ← primaryContainer (pressed-state highlight)
+ *   - `accent` ← primary (Enter / accent buttons)
+ *   - `onAccent` ← onPrimary
+ *   - `ink` / `inkSoft` ← onSurface / onSurfaceVariant
+ *   - `hairline` ← outlineVariant
+ */
+private fun materialYouTokens(context: Context, dark: Boolean): KeyboardTokens {
+    val cs = if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    return KeyboardTokens(
+        sheet = cs.surface,
+        strip = cs.surfaceVariant,
+        key = if (dark) cs.surfaceContainerHigh else cs.surface,
+        keyAlt = if (dark) cs.surfaceContainerHighest else cs.surfaceVariant,
+        keyPress = cs.primaryContainer,
+        ink = cs.onSurface,
+        inkSoft = cs.onSurfaceVariant,
+        accent = cs.primary,
+        accentSoft = cs.primaryContainer,
+        onAccent = cs.onPrimary,
+        hairline = cs.outlineVariant,
+    )
+}
 
 // Direct port of the JSX `tokens(palette, dark)` function from
 // the Claude Design handoff (korjapime/project/keyboards.jsx).

@@ -96,6 +96,14 @@ class KorJpnImeService :
     @Volatile private var inputLanguage: InputLanguage = InputLanguage.JAPANESE
 
     /**
+     * User-tunable cap on the candidate strip — lower values surface
+     * fewer kanji at a glance but also let users with smaller screens
+     * keep the strip scannable.  Default matches the prior hard-coded
+     * MAX_CANDIDATES (32).
+     */
+    @Volatile private var candidateCount: Int = KeyboardPreferences.DEFAULT_CANDIDATE_COUNT
+
+    /**
      * Kana → kanji dictionary, loaded once asynchronously from
      * `assets/jpn_dict.txt` in [onCreate].  Null candidates while loading.
      */
@@ -149,6 +157,12 @@ class KorJpnImeService :
         }
         lifecycleScope.launch {
             KeyboardPreferences.inputLanguageFlow(applicationContext).collect { inputLanguage = it }
+        }
+        lifecycleScope.launch {
+            KeyboardPreferences.candidateCountFlow(applicationContext).collect {
+                candidateCount = it
+                refreshCandidates()  // recompute with new cap
+            }
         }
         lifecycleScope.launch {
             // Async dict load — ~19 MB, takes ~200 ms on Note20 first run.
@@ -259,8 +273,9 @@ class KorJpnImeService :
         // 3. Static dictionary candidates (most-frequent-first), capped to
         //    leave room for the katakana + hiragana fallbacks below — even
         //    when a high-frequency kana like あい has many kanji entries.
+        val cap = candidateCount
         if (dictionary.isLoaded) {
-            val dictBudget = (MAX_CANDIDATES - 2).coerceAtLeast(0)
+            val dictBudget = (cap - 2).coerceAtLeast(0)
             combined.addAll(dictionary.lookup(currentKanaRun).take(dictBudget))
         }
         // 4. Auto-katakana fallback — guaranteed slot regardless of dict size.
@@ -268,7 +283,7 @@ class KorJpnImeService :
         if (katakana != currentKanaRun) combined.add(katakana)
         // 5. Raw hiragana stay-as-is.
         combined.add(currentKanaRun)
-        _candidates.value = combined.toList().take(MAX_CANDIDATES)
+        _candidates.value = combined.toList().take(cap)
     }
 
     /** Hiragana (U+3041..U+3096) → Katakana (U+30A1..U+30F6) by +0x60 shift. */
@@ -737,10 +752,6 @@ class KorJpnImeService :
     }
 
     companion object {
-        // Enough to fill several scrolls + room for the expanded panel.
-        // Beyond this users want the full grid view (vertical expand).
-        private const val MAX_CANDIDATES = 32
-
         /**
          * Viterbi top-K depth — small because near-duplicates of the top
          * pick provide diminishing return in the candidate strip, and

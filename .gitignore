@@ -43,3 +43,10 @@ debug.log
 # Personal
 .claude/
 CLAUDE.md
+
+# Android signing — keystore.properties holds the release keystore
+# password and path; the .jks file lives outside the repo (C:/keystores/)
+# but the properties file would otherwise leak the password into git.
+android/keystore.properties
+*.jks
+*.keystore

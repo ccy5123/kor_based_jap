@@ -35,6 +35,7 @@ object KeyboardPreferences {
     private val THEME_MODE_KEY = stringPreferencesKey("theme_mode")
     private val HEIGHT_KEY = intPreferencesKey("keyboard_height_dp")
     private val INPUT_LANG_KEY = stringPreferencesKey("input_language")
+    private val CANDIDATE_COUNT_KEY = intPreferencesKey("candidate_count")
 
     /** Default theme direction id — d1 Stratus (cool blue, rounded, chip strip). */
     const val DEFAULT_DIRECTION_ID = "d1"
@@ -124,5 +125,27 @@ object KeyboardPreferences {
 
     suspend fun setInputLanguage(context: Context, lang: InputLanguage) {
         context.dataStore.edit { it[INPUT_LANG_KEY] = lang.name }
+    }
+
+    /**
+     * Default cap on candidate strip entries — generous enough to hide
+     * the empty-row visual but small enough that the strip stays
+     * scannable.  User-adjustable via the Settings slider.
+     */
+    const val DEFAULT_CANDIDATE_COUNT = 32
+    const val MIN_CANDIDATE_COUNT = 5
+    const val MAX_CANDIDATE_COUNT = 64
+
+    /** Stream of the user's candidate-count cap. */
+    fun candidateCountFlow(context: Context): Flow<Int> =
+        context.dataStore.data.map { prefs ->
+            (prefs[CANDIDATE_COUNT_KEY] ?: DEFAULT_CANDIDATE_COUNT)
+                .coerceIn(MIN_CANDIDATE_COUNT, MAX_CANDIDATE_COUNT)
+        }
+
+    suspend fun setCandidateCount(context: Context, count: Int) {
+        context.dataStore.edit {
+            it[CANDIDATE_COUNT_KEY] = count.coerceIn(MIN_CANDIDATE_COUNT, MAX_CANDIDATE_COUNT)
+        }
     }
 }

@@ -45,7 +45,7 @@ import io.github.ccy5123.korjpnime.theme.DIRECTIONS
 import io.github.ccy5123.korjpnime.theme.Direction
 import io.github.ccy5123.korjpnime.theme.KeyboardMode
 import io.github.ccy5123.korjpnime.theme.ThemeMode
-import io.github.ccy5123.korjpnime.theme.tokens
+import io.github.ccy5123.korjpnime.theme.resolveTokens
 import kotlinx.coroutines.launch
 
 /**
@@ -76,6 +76,8 @@ fun SettingsScreen(onClose: () -> Unit) {
         .collectAsState(initial = true)
     val heightDp by KeyboardPreferences.heightFlow(context)
         .collectAsState(initial = KeyboardPreferences.DEFAULT_HEIGHT_DP)
+    val candidateCount by KeyboardPreferences.candidateCountFlow(context)
+        .collectAsState(initial = KeyboardPreferences.DEFAULT_CANDIDATE_COUNT)
 
     Column(
         modifier = Modifier
@@ -138,6 +140,15 @@ fun SettingsScreen(onClose: () -> Unit) {
         )
 
         Spacer(Modifier.height(28.dp))
+        SectionLabel("후보 개수")
+        Spacer(Modifier.height(10.dp))
+
+        CandidateCountSlider(
+            count = candidateCount,
+            onChange = { c -> scope.launch { KeyboardPreferences.setCandidateCount(context, c) } },
+        )
+
+        Spacer(Modifier.height(28.dp))
         SectionLabel("입력 피드백")
         Spacer(Modifier.height(10.dp))
 
@@ -184,7 +195,7 @@ private fun DirectionCard(
     dark: Boolean,
     onClick: () -> Unit,
 ) {
-    val tokens = tokens(direction.palette, dark)
+    val tokens = resolveTokens(direction, dark, LocalContext.current)
     val borderColor = if (selected) tokens.accent else Color(0xFFE0E0E0)
     val borderWidth = if (selected) 2.dp else 1.dp
 
@@ -410,6 +421,72 @@ private fun HeightSlider(
         ) {
             Text(text = "$min dp", fontSize = 11.sp, color = Color(0xFF9A9A9A))
             Text(text = "$max dp", fontSize = 11.sp, color = Color(0xFF9A9A9A))
+        }
+    }
+}
+
+/**
+ * Candidate-strip cap slider.  Same pattern as [HeightSlider] —
+ * float-driven local state for smooth thumb tracking, rounded to int
+ * before persistence.  Range pulled from [KeyboardPreferences] so
+ * MIN / MAX / DEFAULT live in one place.
+ */
+@Composable
+private fun CandidateCountSlider(
+    count: Int,
+    onChange: (Int) -> Unit,
+) {
+    var localValue by remember(count) { mutableFloatStateOf(count.toFloat()) }
+    val min = KeyboardPreferences.MIN_CANDIDATE_COUNT
+    val max = KeyboardPreferences.MAX_CANDIDATE_COUNT
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFFFAFAFA))
+            .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(12.dp))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = "최대 후보 개수", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "후보 표시줄에 보이는 글자 수의 상한",
+                    fontSize = 13.sp,
+                    color = Color(0xFF6B6B6B),
+                )
+            }
+            Text(
+                text = "${localValue.toInt()} 개",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFF333333),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Slider(
+            value = localValue,
+            onValueChange = {
+                localValue = it
+                onChange(it.toInt())
+            },
+            valueRange = min.toFloat()..max.toFloat(),
+            // ~1-step granularity is overkill on a 5..64 range; group by 5.
+            steps = (max - min) / 5 - 1,
+            colors = SliderDefaults.colors(),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(text = "$min 개", fontSize = 11.sp, color = Color(0xFF9A9A9A))
+            Text(text = "$max 개", fontSize = 11.sp, color = Color(0xFF9A9A9A))
         }
     }
 }
