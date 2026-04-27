@@ -3,6 +3,7 @@ package io.github.ccy5123.korjpnime.keyboard
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -27,6 +28,18 @@ private sealed class CjCell {
     data class Punct(val cycle: List<Char>) : CjCell() {
         val display: String get() = cycle.joinToString("")
     }
+    /**
+     * Split bottom-left cell.  Left half opens the symbols / numeric page;
+     * right half cycles foreign-language layouts (한 ↔ 영, long-press =
+     * system IME picker).  Visually one grid cell, internally two halves
+     * with `weight = 1f` each inside a `weight = 1f` parent.
+     */
+    object SymbolLangSplit : CjCell()
+    /**
+     * Trigger kanji conversion on the current run.  Placeholder for now —
+     * key surfaces but the conversion wiring lands in a later slice.
+     */
+    object Hanja : CjCell()
     /** Symbols / numbers page — placeholder until M2 wires the page. */
     data class Plain(val label: String) : CjCell()
     object Backspace : CjCell()
@@ -38,6 +51,19 @@ private sealed class CjCell {
 // Pull cycles from the composer's authoritative table so the keypad and the
 // state machine never drift.
 private val CYCLES = CheonjiinComposer.CONSONANT_CYCLES
+
+/**
+ * Phone-dialpad style digit overlay — long-press on each letter cell
+ * produces the corresponding digit.  ㅇㅁ at "0" mirrors the round
+ * shape of the digit; ㅣ ㆍ ㅡ map to the top row 1 / 2 / 3.  Service-
+ * side `digitsToFullWidth` then converts to ０..９ for the editor.
+ */
+private val DIGIT_BY_PRIMARY: Map<Char, String> = mapOf(
+    'ㅣ' to "1", 'ㆍ' to "2", 'ㅡ' to "3",
+    'ㄱ' to "4", 'ㄴ' to "5", 'ㄷ' to "6",
+    'ㅂ' to "7", 'ㅅ' to "8", 'ㅈ' to "9",
+    'ㅇ' to "0",
+)
 
 private val GRID: List<List<CjCell>> = listOf(
     listOf(
@@ -60,10 +86,10 @@ private val GRID: List<List<CjCell>> = listOf(
         CjCell.Punct(listOf('。', '、', '？', '！')),
     ),
     listOf(
-        CjCell.Plain("!#1"),
+        CjCell.SymbolLangSplit,
         CjCell.ConsonantGroup(CYCLES.getValue('ㅇ')),
         CjCell.Space,
-        CjCell.Globe,
+        CjCell.Hanja,
     ),
 )
 
@@ -90,15 +116,27 @@ fun CheonjiinLayout(
             ) {
                 row.forEach { cell ->
                     when (cell) {
-                        is CjCell.Vowel -> Key(
-                            tokens, shape, label = cell.stroke.toString(),
-                            onClick = { onAction(KeyAction.CjVowel(cell.stroke)) },
-                        )
-                        is CjCell.ConsonantGroup -> Key(
-                            tokens, shape,
-                            double = cell.displayPrimary to cell.displaySecondary,
-                            onClick = { onAction(KeyAction.CjConsonant(cell.cycle)) },
-                        )
+                        is CjCell.Vowel -> {
+                            val digit = DIGIT_BY_PRIMARY[cell.stroke]
+                            Key(
+                                tokens, shape, label = cell.stroke.toString(),
+                                onClick = { onAction(KeyAction.CjVowel(cell.stroke)) },
+                                onLongPress = digit?.let { d ->
+                                    { onAction(KeyAction.Commit(d)) }
+                                },
+                            )
+                        }
+                        is CjCell.ConsonantGroup -> {
+                            val digit = DIGIT_BY_PRIMARY[cell.cycle.first()]
+                            Key(
+                                tokens, shape,
+                                double = cell.displayPrimary to cell.displaySecondary,
+                                onClick = { onAction(KeyAction.CjConsonant(cell.cycle)) },
+                                onLongPress = digit?.let { d ->
+                                    { onAction(KeyAction.Commit(d)) }
+                                },
+                            )
+                        }
                         is CjCell.Punct -> Key(
                             tokens, shape, fn = true, label = cell.display,
                             onClick = { onAction(KeyAction.CjPunct(cell.cycle)) },
@@ -122,6 +160,39 @@ fun CheonjiinLayout(
                         CjCell.Space -> SpaceKey(
                             tokens = tokens, shape = shape, weight = 1f,
                             onClick = { onAction(KeyAction.Space) },
+                        )
+                        CjCell.SymbolLangSplit -> {
+                            // One grid slot, two half-keys.  Inner Row is
+                            // weight=1f against the outer keypad row; each
+                            // child Key is weight=1f against the inner Row,
+                            // so they share the slot 50/50.
+                            Row(
+                                modifier = Modifier.weight(1f).fillMaxHeight(),
+                                horizontalArrangement = Arrangement.spacedBy(gap.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Key(
+                                    tokens, shape, fn = true, label = "문자",
+                                    onClick = { onAction(KeyAction.Symbols) },
+                                )
+                                Key(
+                                    tokens, shape, fn = true, label = "한/영",
+                                    // Tap = internal Korean ↔ English layout
+                                    // toggle (wired in M4.B.5).  Long-press =
+                                    // system IME picker so users keep that
+                                    // escape hatch even with Globe removed.
+                                    onClick = { /* TODO: lang toggle */ },
+                                    onLongPress = { onAction(KeyAction.SwitchIme) },
+                                )
+                            }
+                        }
+                        CjCell.Hanja -> Key(
+                            tokens, shape, fn = true, label = "한자",
+                            // Trigger syllable-by-syllable kanji conversion
+                            // on the current run.  Wired later — placeholder
+                            // for now per the user's "일단 키만 놔두고
+                            // 작동은 나중에" request.
+                            onClick = { /* TODO: Hanja conversion */ },
                         )
                     }
                 }

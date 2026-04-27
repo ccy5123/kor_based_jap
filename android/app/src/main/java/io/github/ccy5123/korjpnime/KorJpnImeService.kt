@@ -10,6 +10,7 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.Lifecycle
@@ -32,6 +33,7 @@ import io.github.ccy5123.korjpnime.engine.UserDict
 import io.github.ccy5123.korjpnime.engine.Viterbi
 import io.github.ccy5123.korjpnime.keyboard.KeyAction
 import io.github.ccy5123.korjpnime.keyboard.KeyboardSurface
+import io.github.ccy5123.korjpnime.keyboard.LocalHapticsEnabled
 import io.github.ccy5123.korjpnime.theme.DIRECTIONS
 import io.github.ccy5123.korjpnime.theme.KeyboardMode
 import io.github.ccy5123.korjpnime.theme.ThemeMode
@@ -161,6 +163,8 @@ class KorJpnImeService :
                 .collectAsState(initial = KeyboardPreferences.DEFAULT_DIRECTION_ID)
             val themeMode by KeyboardPreferences.themeModeFlow(applicationContext)
                 .collectAsState(initial = ThemeMode.AUTO)
+            val haptics by KeyboardPreferences.hapticsFlow(applicationContext)
+                .collectAsState(initial = true)
             val candidateList by candidates.collectAsState()
 
             val direction = DIRECTIONS.firstOrNull { it.id == directionId } ?: DIRECTIONS.first()
@@ -172,15 +176,17 @@ class KorJpnImeService :
             }
 
             MaterialTheme {
-                KeyboardSurface(
-                    direction = direction,
-                    dark = dark,
-                    mode = mode,
-                    candidates = candidateList,
-                    onCandidatePick = ::handleCandidatePick,
-                    onAction = ::handleAction,
-                    onSettingsClick = ::openSettings,
-                )
+                CompositionLocalProvider(LocalHapticsEnabled provides haptics) {
+                    KeyboardSurface(
+                        direction = direction,
+                        dark = dark,
+                        mode = mode,
+                        candidates = candidateList,
+                        onCandidatePick = ::handleCandidatePick,
+                        onAction = ::handleAction,
+                        onSettingsClick = ::openSettings,
+                    )
+                }
             }
         }
     }
@@ -337,7 +343,10 @@ class KorJpnImeService :
 
     private fun handleAction(action: KeyAction) {
         val ic = currentInputConnection ?: return
-        performHapticIfEnabled()
+        // Haptic now fires from the UI's press-down handler (Key.kt /
+        // BackspaceKey.kt) instead of here on tap-up — the prior tap-up
+        // path had perceptible (~100 ms) latency.  performHapticIfEnabled
+        // is kept on the class as a fallback but no longer invoked per-tap.
         // Catch external field changes that bypass onUpdateSelection (KakaoTalk's
         // send button clears the field but doesn't notify our IME, so the leak
         // detector below misses it).  Sync IPC, runs only when composer is
@@ -558,9 +567,26 @@ class KorJpnImeService :
                 // Punctuation, digits, kana, anything non-jamo — flush
                 // in-progress syllable first so it commits BEFORE the new text.
                 flushComposerInner(ic)
-                emit(ic, text)
+                emit(ic, digitsToFullWidth(text))
             }
         }
+    }
+
+    /**
+     * Convert ASCII digits to full-width Japanese counterparts (０..９,
+     * U+FF10..U+FF19).  Applied in [handleCommit]'s non-jamo branch so
+     * every digit the user types in our IME's Japanese-output context
+     * gets the Japanese-correct width.  Non-digit chars pass through
+     * unchanged.  No-op when there are no ASCII digits.
+     */
+    private fun digitsToFullWidth(text: String): String {
+        if (text.isEmpty()) return text
+        if (!text.any { it in '0'..'9' }) return text
+        val sb = StringBuilder(text.length)
+        for (c in text) {
+            sb.append(if (c in '0'..'9') (c.code - '0'.code + 0xFF10).toChar() else c)
+        }
+        return sb.toString()
     }
 
     /**
