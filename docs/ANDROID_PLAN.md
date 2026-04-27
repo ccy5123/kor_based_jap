@@ -7,7 +7,11 @@
 ## Status
 
 - 🟢 **Windows TSF v1.0.0 shipped.**  See [CHANGELOG](../CHANGELOG.md).
-- 🟡 **Android port: planning.**  No code yet.  Next milestone: M1 below.
+- 🟢 **Android M1 input layer shipped** (D3 + Shift + composer leak/sync
+  fix + closeout: backspace-repeat / Settings + DataStore / Cheonjiin
+  state machine).  Verified on Note20 Ultra 5G.
+- 🟡 **Android M2: kanji conversion via simple dict.**  Up next; see
+  M2 checklist + new-session bootstrap below.
 
 ## Agreed direction
 
@@ -331,25 +335,37 @@ where Android Studio reads from; the WSL worktree is no longer the
 source of truth), then paste:
 
 ```
-이전 세션에서 Android D2 까지 완성 — IME 가 Note20 Ultra 5G (Android 13)
-에서 정상 동작, raw 자모 (ㅎ ㅏ ㄴ) 가 editor 에 그대로 찍힘 (한글 합성은 D3).
+이전 세션에서 Android M1 input layer 까지 완성 — Note20 Ultra 5G (Android 13)
+에서 검증됨.  들어간 것: D3 (HangulComposer + BatchimLookup + SyllableTables
+포팅 + service Hangul 합성 wiring), Shift state machine (두벌식 momentary +
+쌍자음 dispatch), composer leak / sync fix (batchEdit + onUpdateSelection +
+resyncComposerIfStale via getTextBeforeCursor — KakaoTalk send 후 잔존
+preedit leak 막음), M1 closeout 3개:
+  A) Backspace long-press repeat (BackspaceKey.kt, 두벌식 + 천지인 양쪽)
+  B) DataStore + Settings screen + 키보드 mode toggle + 햅틱 토글 + gear icon
+  C) 천지인 state machine (consonant cycle 7개 + ㅣ/ㆍ/ㅡ vowel composition,
+     space-as-conditional-break, .,?! punct cycle, ㅠ+ㅣ→ㅝ revert).
 repo: https://github.com/ccy5123/kor_based_jap (작업 경로 C:\dev\kor_based_jap)
-디자인: d1 Stratus (cool blue, rounded square, chip strip) 하드코딩 — 모드 토글은 M1 끝물 DataStore 작업
+디자인: d1 Stratus (cool blue, rounded square, chip strip) 하드코딩 — Settings
+의 mode 토글은 두벌식 ↔ 천지인 만, design direction 자체는 M4 polish.
 
 memory/ 에 빌드 환경 (gradle wrapper / JBR / ANDROID_HOME / TEMP 우회)
 + IME 호스팅 교훈 (parentPanel 트랩 / AbstractComposeView 패턴) 저장됨.
 
-다음으로 D3 — Hangul composer 포팅 (ㅎ+ㅏ+ㄴ → 한):
-- engine/HangulComposer.kt (~380 LOC) — tsf/src/HangulComposer.cpp 의
-  3-state machine verbatim 포팅
-- engine/BatchimLookup.kt (~200 LOC) — tsf/src/BatchimLookup.h
-- engine/SyllableTables.kt (~220 LOC) — tsf/generated/{mapping_table,
-  batchim_rules}.h 데이터를 Kotlin Map 으로 (build-time generator
-  대신 hardcode — 데이터가 6개월에 한 번 바뀜)
-- KorJpnImeService.handleAction 을 composer.input(jamo) →
-  setComposingText (preedit) / commitText (finalized) 패턴으로 재배선
+다음으로 **M2 — 가나 변환 (kanji conversion via simple dict)**:
+- assets/jpn_dict.txt 번들링 (~18 MB)
+- tsf/src/Dictionary.cpp (mmap) 의 Kotlin 포팅 — RandomAccessFile +
+  FileChannel.map 으로 memory mapping
+- 후보 strip Compose component (TopChrome 위 또는 candidate strip 자리에 — 현재
+  자리 비어있음).  Space 탭 후 kanji 후보 가로 스크롤
+- tsf/src/UserDict.cpp 포팅 — Room 또는 SharedPreferences 백엔드
+- BatchimLookup.suffix() 와 batchim rule 데이터 (hatsuon/sokuon/foreignKana)
+  는 D3 에 이미 inert 포팅됨 — M2 에서 `BatchimLookup.lookup()` 만 추가하면 됨
+- tsf/generated/mapping_table.h (~155 entries, syllable→kana) 는 아직 미포팅 —
+  M2 의 첫 단계로 SyllableTables.kt 에 추가 (D3 plan 에 적었던 대로)
+- KorJpnImeService 의 jamo flush 경로에서 syllable → kana lookup 호출,
+  결과를 commitText (이때부터 ㅎㅏㄴ → 한 → は 로 commit)
+- Auto-katakana fallback (KeyHandler.cpp 의 동일 로직)
 
-D3 는 한글 합성에서 멈춤 (가나 변환은 M2).  상세 플랜 + 5개 edge case
-(따따 버그 / particle marker / compound jong split / raw jamo fusion /
-backspace 우선순위) → ANDROID_PLAN.md 의 "D3 plan" 섹션.
+ANDROID_PLAN.md 의 M2 섹션 참고.
 ```
