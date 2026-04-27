@@ -13,15 +13,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import io.github.ccy5123.korjpnime.theme.Direction
+import io.github.ccy5123.korjpnime.theme.InputLanguage
 import io.github.ccy5123.korjpnime.theme.KeyboardMode
-import io.github.ccy5123.korjpnime.theme.tokens
+import io.github.ccy5123.korjpnime.theme.resolveTokens
 
 /**
  * Full keyboard: top chrome + candidate strip + key grid for the selected mode.
- * Sized to the design's 312 dp keyboard height by default; pass [Modifier.height]
- * to override.
+ * Height is controlled by [heightDp] (default 360 dp); user-adjustable via the
+ * Settings slider, persisted in [io.github.ccy5123.korjpnime.data.KeyboardPreferences].
  */
 // @MX:ANCHOR: [AUTO] Single rendering entry point for the IME — invariant across
 // MainActivity preview, KorJpnImeService.onCreateInputView (D2), and the @Preview matrix.
@@ -34,12 +36,15 @@ fun KeyboardSurface(
     dark: Boolean,
     mode: KeyboardMode,
     modifier: Modifier = Modifier,
+    heightDp: Int = 360,
+    inputLanguage: InputLanguage = InputLanguage.JAPANESE,
+    onLanguageCycle: () -> Unit = {},
     candidates: List<String> = emptyList(),
     onCandidatePick: (String) -> Unit = {},
     onAction: (KeyAction) -> Unit = {},
     onSettingsClick: (() -> Unit)? = null,
 ) {
-    val tokens = tokens(direction.palette, dark)
+    val tokens = resolveTokens(direction, dark, LocalContext.current)
     var expanded by remember { mutableStateOf(false) }
     // Auto-collapse when candidates clear (user picked, run reset, etc.)
     LaunchedEffect(candidates) { if (candidates.isEmpty()) expanded = false }
@@ -47,7 +52,7 @@ fun KeyboardSurface(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .height(312.dp)
+            .height(heightDp.dp)
             .background(tokens.sheet),
     ) {
         TopChrome(tokens = tokens, onSettingsClick = onSettingsClick)
@@ -61,12 +66,22 @@ fun KeyboardSurface(
             } else null,
         )
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-            when (mode) {
-                KeyboardMode.BEOLSIK -> BeolsikLayout(
+            // ENGLISH mode always renders QWERTY regardless of the user's
+            // 두벌식 / 천지인 keyboardMode preference — Cheonjiin's 4×4 grid
+            // can't host a sensible English layout without T9-style multi-tap,
+            // and QWERTY is the universal expectation for ASCII input.
+            when {
+                inputLanguage == InputLanguage.ENGLISH -> QwertyLayout(
                     tokens = tokens, shape = direction.shape, onAction = onAction,
+                    inputLanguage = inputLanguage, onLanguageCycle = onLanguageCycle,
                 )
-                KeyboardMode.CHEONJIIN -> CheonjiinLayout(
+                mode == KeyboardMode.BEOLSIK -> BeolsikLayout(
                     tokens = tokens, shape = direction.shape, onAction = onAction,
+                    inputLanguage = inputLanguage, onLanguageCycle = onLanguageCycle,
+                )
+                else -> CheonjiinLayout(
+                    tokens = tokens, shape = direction.shape, onAction = onAction,
+                    inputLanguage = inputLanguage, onLanguageCycle = onLanguageCycle,
                 )
             }
             if (expanded && candidates.isNotEmpty()) {

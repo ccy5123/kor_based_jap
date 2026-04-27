@@ -1,5 +1,6 @@
 package io.github.ccy5123.korjpnime.keyboard
 
+import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -18,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import io.github.ccy5123.korjpnime.theme.KeyShape
 import io.github.ccy5123.korjpnime.theme.KeyboardTokens
@@ -49,6 +51,8 @@ fun RowScope.BackspaceKey(
     onTriggerBackspace: () -> Unit,
 ) {
     var pressed by remember { mutableStateOf(false) }
+    val view = LocalView.current
+    val hapticsEnabled = LocalHapticsEnabled.current
 
     // Auto-repeat coroutine.  LaunchedEffect(pressed) cancels cleanly when the
     // finger lifts because waitForUpOrCancellation flips `pressed = false`,
@@ -58,6 +62,12 @@ fun RowScope.BackspaceKey(
         delay(INITIAL_HOLD_MS)
         var interval = REPEAT_START_MS
         while (isActive) {
+            // Match the press-down haptic on every auto-repeat tick so the
+            // user feels each delete (otherwise the held-backspace stream
+            // is silent after the initial press).
+            if (hapticsEnabled) {
+                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            }
             onTriggerBackspace()
             delay(interval)
             if (interval > REPEAT_FLOOR_MS) {
@@ -86,8 +96,13 @@ fun RowScope.BackspaceKey(
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
-                    // Fire one immediately so a quick tap deletes a single char
-                    // without waiting for the hold timeout.
+                    // Fire haptic on the press-down edge for instant tactile
+                    // feedback (matches the Key composable's behaviour).
+                    if (hapticsEnabled) {
+                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    }
+                    // Fire one delete immediately so a quick tap deletes a
+                    // single char without waiting for the hold timeout.
                     onTriggerBackspace()
                     pressed = true
                     try {

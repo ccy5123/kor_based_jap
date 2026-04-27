@@ -1,7 +1,8 @@
 package io.github.ccy5123.korjpnime.keyboard
 
+import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -25,7 +28,10 @@ import io.github.ccy5123.korjpnime.theme.KeyboardTokens
 
 /**
  * Single keyboard key. [onClick] is fired on tap-up; pass null in @Preview
- * to keep the surface inert.
+ * to keep the surface inert.  [onLongPress] adds a hold gesture (used for
+ * Cheonjiin's long-press → digit shortcut) — when both are set, the key
+ * wires up via [pointerInput] / [detectTapGestures] instead of plain
+ * [clickable] so press-and-hold dispatches independently from quick tap.
  */
 @Composable
 fun RowScope.Key(
@@ -39,6 +45,7 @@ fun RowScope.Key(
     accent: Boolean = false,
     pressed: Boolean = false,
     onClick: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
     content: (@Composable () -> Unit)? = null,
 ) {
     val radius = when (shape) {
@@ -59,13 +66,33 @@ fun RowScope.Key(
         else -> tokens.ink
     }
     val flat = shape == KeyShape.FLAT
+    val view = LocalView.current
+    val hapticsEnabled = LocalHapticsEnabled.current
 
     Box(
         modifier = Modifier
             .weight(weight)
             .fillMaxHeight()
             .let { if (flat) it.divider(tokens.hairline) else it.clip(RoundedCornerShape(radius)).background(bg) }
-            .let { if (onClick != null) it.clickable(onClick = onClick) else it },
+            .let { mod ->
+                if (onClick == null && onLongPress == null) return@let mod
+                // Single pointerInput path covers both the tap-only and the
+                // tap+long-press cases — fires KEYBOARD_TAP haptic on the
+                // press-down edge so the buzz feels instant (the prior
+                // tap-up haptic via the service had ~100 ms perceived lag).
+                mod.pointerInput(onClick to onLongPress) {
+                    detectTapGestures(
+                        onPress = {
+                            if (hapticsEnabled) {
+                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            }
+                            tryAwaitRelease()
+                        },
+                        onTap = { if (onClick != null) onClick() },
+                        onLongPress = { if (onLongPress != null) onLongPress() },
+                    )
+                }
+            },
         contentAlignment = Alignment.Center,
     ) {
         when {

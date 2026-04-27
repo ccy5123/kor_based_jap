@@ -4,11 +4,14 @@ import android.content.Intent
 import android.inputmethodservice.InputMethodService
 import android.os.Build
 import android.view.HapticFeedbackConstants
+import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.Lifecycle
@@ -31,8 +34,11 @@ import io.github.ccy5123.korjpnime.engine.UserDict
 import io.github.ccy5123.korjpnime.engine.Viterbi
 import io.github.ccy5123.korjpnime.keyboard.KeyAction
 import io.github.ccy5123.korjpnime.keyboard.KeyboardSurface
+import io.github.ccy5123.korjpnime.keyboard.LocalHapticsEnabled
 import io.github.ccy5123.korjpnime.theme.DIRECTIONS
+import io.github.ccy5123.korjpnime.theme.InputLanguage
 import io.github.ccy5123.korjpnime.theme.KeyboardMode
+import io.github.ccy5123.korjpnime.theme.ThemeMode
 import io.github.ccy5123.korjpnime.ui.SettingsActivity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -80,6 +86,22 @@ class KorJpnImeService :
      * written from the lifecycleScope coroutine.
      */
     @Volatile private var hapticsEnabled: Boolean = true
+
+    /**
+     * Latest input-language mode cached from [KeyboardPreferences.inputLanguageFlow].
+     * Read by [digitsToFullWidth] to gate ASCII→full-width conversion (only
+     * fires in JAPANESE mode).  @Volatile for the same reason as
+     * [hapticsEnabled].
+     */
+    @Volatile private var inputLanguage: InputLanguage = InputLanguage.JAPANESE
+
+    /**
+     * User-tunable cap on the candidate strip — lower values surface
+     * fewer kanji at a glance but also let users with smaller screens
+     * keep the strip scannable.  Default matches the prior hard-coded
+     * MAX_CANDIDATES (32).
+     */
+    @Volatile private var candidateCount: Int = KeyboardPreferences.DEFAULT_CANDIDATE_COUNT
 
     /**
      * Kana → kanji dictionary, loaded once asynchronously from
@@ -134,6 +156,15 @@ class KorJpnImeService :
             KeyboardPreferences.hapticsFlow(applicationContext).collect { hapticsEnabled = it }
         }
         lifecycleScope.launch {
+            KeyboardPreferences.inputLanguageFlow(applicationContext).collect { inputLanguage = it }
+        }
+        lifecycleScope.launch {
+            KeyboardPreferences.candidateCountFlow(applicationContext).collect {
+                candidateCount = it
+                refreshCandidates()  // recompute with new cap
+            }
+        }
+        lifecycleScope.launch {
             // Async dict load — ~19 MB, takes ~200 ms on Note20 first run.
             // Candidates stay empty until this completes.
             dictionary.load(applicationContext)
@@ -155,17 +186,41 @@ class KorJpnImeService :
         return KorJpnImeView(context = this, owner = this) {
             val mode by KeyboardPreferences.modeFlow(applicationContext)
                 .collectAsState(initial = KeyboardMode.BEOLSIK)
+            val directionId by KeyboardPreferences.directionFlow(applicationContext)
+                .collectAsState(initial = KeyboardPreferences.DEFAULT_DIRECTION_ID)
+            val themeMode by KeyboardPreferences.themeModeFlow(applicationContext)
+                .collectAsState(initial = ThemeMode.AUTO)
+            val haptics by KeyboardPreferences.hapticsFlow(applicationContext)
+                .collectAsState(initial = true)
+            val heightDp by KeyboardPreferences.heightFlow(applicationContext)
+                .collectAsState(initial = KeyboardPreferences.DEFAULT_HEIGHT_DP)
+            val inputLang by KeyboardPreferences.inputLanguageFlow(applicationContext)
+                .collectAsState(initial = InputLanguage.JAPANESE)
             val candidateList by candidates.collectAsState()
+
+            val direction = DIRECTIONS.firstOrNull { it.id == directionId } ?: DIRECTIONS.first()
+            val systemDark = isSystemInDarkTheme()
+            val dark = when (themeMode) {
+                ThemeMode.AUTO -> systemDark
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
+            }
+
             MaterialTheme {
-                KeyboardSurface(
-                    direction = DIRECTIONS.first(),
-                    dark = false,
-                    mode = mode,
-                    candidates = candidateList,
-                    onCandidatePick = ::handleCandidatePick,
-                    onAction = ::handleAction,
-                    onSettingsClick = ::openSettings,
-                )
+                CompositionLocalProvider(LocalHapticsEnabled provides haptics) {
+                    KeyboardSurface(
+                        direction = direction,
+                        dark = dark,
+                        mode = mode,
+                        heightDp = heightDp,
+                        inputLanguage = inputLang,
+                        onLanguageCycle = ::cycleInputLanguage,
+                        candidates = candidateList,
+                        onCandidatePick = ::handleCandidatePick,
+                        onAction = ::handleAction,
+                        onSettingsClick = ::openSettings,
+                    )
+                }
             }
         }
     }
@@ -218,8 +273,9 @@ class KorJpnImeService :
         // 3. Static dictionary candidates (most-frequent-first), capped to
         //    leave room for the katakana + hiragana fallbacks below — even
         //    when a high-frequency kana like あい has many kanji entries.
+        val cap = candidateCount
         if (dictionary.isLoaded) {
-            val dictBudget = (MAX_CANDIDATES - 2).coerceAtLeast(0)
+            val dictBudget = (cap - 2).coerceAtLeast(0)
             combined.addAll(dictionary.lookup(currentKanaRun).take(dictBudget))
         }
         // 4. Auto-katakana fallback — guaranteed slot regardless of dict size.
@@ -227,7 +283,7 @@ class KorJpnImeService :
         if (katakana != currentKanaRun) combined.add(katakana)
         // 5. Raw hiragana stay-as-is.
         combined.add(currentKanaRun)
-        _candidates.value = combined.toList().take(MAX_CANDIDATES)
+        _candidates.value = combined.toList().take(cap)
     }
 
     /** Hiragana (U+3041..U+3096) → Katakana (U+30A1..U+30F6) by +0x60 shift. */
@@ -256,6 +312,34 @@ class KorJpnImeService :
         }
         currentKanaRun = ""
         refreshCandidates()
+    }
+
+    /**
+     * Cycle the input-language preference 한 → 영 → 일 → 한.  Triggered by
+     * the dedicated cycle button on the letters page (replaces the prior 2-
+     * state 한/영 toggle).  The UI re-renders via the inputLanguageFlow
+     * collectAsState; symbol page content + space-bar label switch in lockstep.
+     *
+     * Flushes any in-progress composer syllable in the CURRENT language
+     * first — otherwise switching mid-syllable would commit the half-built
+     * jamo as the new language's output (e.g. "ㄱㅏ" pending in JP, switch
+     * to KOR, would surface "가" as Korean instead of "か" the user
+     * intended).  Plus we drop the kana run so KOR→JP doesn't carry stale
+     * candidate context from the previous mode.
+     */
+    private fun cycleInputLanguage() {
+        val ic = currentInputConnection
+        if (ic != null) batched(ic) { flushComposerInner(ic) }
+        currentKanaRun = ""
+        refreshCandidates()
+        val next = when (inputLanguage) {
+            InputLanguage.KOREAN -> InputLanguage.ENGLISH
+            InputLanguage.ENGLISH -> InputLanguage.JAPANESE
+            InputLanguage.JAPANESE -> InputLanguage.KOREAN
+        }
+        lifecycleScope.launch {
+            KeyboardPreferences.setInputLanguage(applicationContext, next)
+        }
     }
 
     private fun openSettings() {
@@ -322,7 +406,10 @@ class KorJpnImeService :
 
     private fun handleAction(action: KeyAction) {
         val ic = currentInputConnection ?: return
-        performHapticIfEnabled()
+        // Haptic now fires from the UI's press-down handler (Key.kt /
+        // BackspaceKey.kt) instead of here on tap-up — the prior tap-up
+        // path had perceptible (~100 ms) latency.  performHapticIfEnabled
+        // is kept on the class as a fallback but no longer invoked per-tap.
         // Catch external field changes that bypass onUpdateSelection (KakaoTalk's
         // send button clears the field but doesn't notify our IME, so the leak
         // detector below misses it).  Sync IPC, runs only when composer is
@@ -346,8 +433,10 @@ class KorJpnImeService :
             KeyAction.Backspace -> handleBackspace(ic)
             KeyAction.Enter -> { batched(ic) { flushComposerInner(ic) }; handleEnter() }
             KeyAction.SwitchIme -> { batched(ic) { flushComposerInner(ic) }; switchIme() }
+            KeyAction.CursorLeft -> { batched(ic) { flushComposerInner(ic) }; sendCursor(ic, KeyEvent.KEYCODE_DPAD_LEFT) }
+            KeyAction.CursorRight -> { batched(ic) { flushComposerInner(ic) }; sendCursor(ic, KeyEvent.KEYCODE_DPAD_RIGHT) }
             KeyAction.Shift -> Unit       // BeolsikLayout owns the Shift state; service receives the action only for haptic
-            KeyAction.Symbols -> Unit     // future milestone
+            KeyAction.Symbols -> Unit     // page state lives in the layout composables
         }
     }
 
@@ -469,8 +558,7 @@ class KorJpnImeService :
                     CheonjiinComposer.Op.Undo -> composer.undoLastJamo()
                     is CheonjiinComposer.Op.Emit -> composer.input(op.jamo).also { finalized ->
                         if (finalized.isNotEmpty()) {
-                            val kana = convertHangulToKana(finalized, composer.currentChoJamo())
-                            emit(ic, kana)
+                            emit(ic, convertForOutput(finalized, composer.currentChoJamo()))
                         }
                     }
                 }
@@ -532,20 +620,64 @@ class KorJpnImeService :
             if (text.length == 1 && HangulComposer.isHangulJamo(text[0])) {
                 val finalized = composer.input(text[0])
                 if (finalized.isNotEmpty()) {
-                    val kana = convertHangulToKana(finalized, composer.currentChoJamo())
-                    emit(ic, kana)
+                    emit(ic, convertForOutput(finalized, composer.currentChoJamo()))
                 }
                 // Preedit shows the in-progress Hangul syllable so the user
-                // sees what they're typing; the kana commit happens once the
-                // syllable closes (above branch).
+                // sees what they're typing; the conversion-to-kana (or
+                // hangul-as-is in Korean mode) happens once the syllable
+                // closes — above branch.
                 ic.setComposingText(composer.preedit(), 1)
             } else {
                 // Punctuation, digits, kana, anything non-jamo — flush
                 // in-progress syllable first so it commits BEFORE the new text.
                 flushComposerInner(ic)
-                emit(ic, text)
+                emit(ic, digitsToFullWidth(text))
             }
         }
+    }
+
+    /**
+     * Convert a finalized Hangul string to the per-mode editor output:
+     *  - JAPANESE: full kana conversion via [convertHangulToKana].
+     *  - KOREAN / ENGLISH: pass the Hangul through unchanged so 두벌식 +
+     *    KOREAN mode types regular Hangul (the project's secondary use case).
+     *
+     * ENGLISH mode shouldn't reach this path in practice — the QWERTY
+     * letters page commits ASCII via the non-jamo branch — but the
+     * fall-through is harmless.
+     */
+    private fun convertForOutput(finalized: String, fallbackNext: Char): String =
+        if (inputLanguage == InputLanguage.JAPANESE) {
+            convertHangulToKana(finalized, fallbackNext)
+        } else {
+            finalized
+        }
+
+    /**
+     * Convert ASCII digits to full-width Japanese counterparts (０..９,
+     * U+FF10..U+FF19) **only** when the current [inputLanguage] is JAPANESE.
+     * KOREAN / ENGLISH modes pass digits through as ASCII.  Non-digit chars
+     * pass through unchanged in all modes.
+     */
+    private fun digitsToFullWidth(text: String): String {
+        if (text.isEmpty()) return text
+        if (inputLanguage != InputLanguage.JAPANESE) return text
+        if (!text.any { it in '0'..'9' }) return text
+        val sb = StringBuilder(text.length)
+        for (c in text) {
+            sb.append(if (c in '0'..'9') (c.code - '0'.code + 0xFF10).toChar() else c)
+        }
+        return sb.toString()
+    }
+
+    /**
+     * Move the editor caret one step in the requested direction.  Uses the
+     * standard DPAD key event which every editor honours; setSelection would
+     * also work but requires querying current selection first.
+     */
+    private fun sendCursor(ic: InputConnection, keyCode: Int) {
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
     }
 
     /**
@@ -591,8 +723,7 @@ class KorJpnImeService :
         if (composer.empty()) return
         val flushed = composer.flush()
         if (flushed.isNotEmpty()) {
-            val kana = convertHangulToKana(flushed, ' ')
-            emit(ic, kana)
+            emit(ic, convertForOutput(flushed, ' '))
         }
     }
 
@@ -621,10 +752,6 @@ class KorJpnImeService :
     }
 
     companion object {
-        // Enough to fill several scrolls + room for the expanded panel.
-        // Beyond this users want the full grid view (vertical expand).
-        private const val MAX_CANDIDATES = 32
-
         /**
          * Viterbi top-K depth — small because near-duplicates of the top
          * pick provide diminishing return in the candidate strip, and

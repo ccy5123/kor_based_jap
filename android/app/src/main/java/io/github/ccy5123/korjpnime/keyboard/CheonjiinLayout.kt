@@ -2,15 +2,23 @@ package io.github.ccy5123.korjpnime.keyboard
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.github.ccy5123.korjpnime.engine.CheonjiinComposer
+import io.github.ccy5123.korjpnime.theme.InputLanguage
 import io.github.ccy5123.korjpnime.theme.KeyShape
 import io.github.ccy5123.korjpnime.theme.KeyboardTokens
 
@@ -27,11 +35,20 @@ private sealed class CjCell {
     data class Punct(val cycle: List<Char>) : CjCell() {
         val display: String get() = cycle.joinToString("")
     }
-    /** Symbols / numbers page — placeholder until M2 wires the page. */
-    data class Plain(val label: String) : CjCell()
+    /**
+     * Split bottom-left cell.  Left half opens the symbols / numeric page;
+     * right half cycles foreign-language layouts (한 ↔ 영, long-press =
+     * system IME picker).  Visually one grid cell, internally two halves
+     * with `weight = 1f` each inside a `weight = 1f` parent.
+     */
+    object SymbolLangSplit : CjCell()
+    /**
+     * Trigger kanji conversion on the current run.  Placeholder for now —
+     * key surfaces but the conversion wiring lands in a later slice.
+     */
+    object Hanja : CjCell()
     object Backspace : CjCell()
     object Enter : CjCell()
-    object Globe : CjCell()
     object Space : CjCell()
 }
 
@@ -39,7 +56,33 @@ private sealed class CjCell {
 // state machine never drift.
 private val CYCLES = CheonjiinComposer.CONSONANT_CYCLES
 
-private val GRID: List<List<CjCell>> = listOf(
+/**
+ * Phone-dialpad style digit overlay — long-press on each letter cell
+ * produces the corresponding digit.  ㅇㅁ at "0" mirrors the round
+ * shape of the digit; ㅣ ㆍ ㅡ map to the top row 1 / 2 / 3.  Service-
+ * side `digitsToFullWidth` then converts to ０..９ for the editor.
+ */
+private val DIGIT_BY_PRIMARY: Map<Char, String> = mapOf(
+    'ㅣ' to "1", 'ㆍ' to "2", 'ㅡ' to "3",
+    'ㄱ' to "4", 'ㄴ' to "5", 'ㄷ' to "6",
+    'ㅂ' to "7", 'ㅅ' to "8", 'ㅈ' to "9",
+    'ㅇ' to "0",
+)
+
+/**
+ * Letters-page punctuation cycle (row 3 col 4) — language-aware.
+ *  - JAPANESE: 句点 → 読点 → 全角？ → 全角！  (standard JP 4-cycle).
+ *  - KOREAN / ENGLISH: ASCII counterparts so Korean Cheonjiin doesn't
+ *    silently emit Japanese full-width punct when the user's mode is
+ *    Korean output.
+ */
+private fun lettersPunctCycleFor(lang: InputLanguage): List<Char> =
+    if (lang == InputLanguage.JAPANESE)
+        listOf('。', '、', '？', '！')
+    else
+        listOf('.', ',', '?', '!')
+
+private fun lettersGridFor(lang: InputLanguage): List<List<CjCell>> = listOf(
     listOf(
         CjCell.Vowel(CheonjiinComposer.STROKE_I),
         CjCell.Vowel(CheonjiinComposer.STROKE_DOT),
@@ -56,22 +99,162 @@ private val GRID: List<List<CjCell>> = listOf(
         CjCell.ConsonantGroup(CYCLES.getValue('ㅂ')),
         CjCell.ConsonantGroup(CYCLES.getValue('ㅅ')),
         CjCell.ConsonantGroup(CYCLES.getValue('ㅈ')),
-        // 句点 → 読点 → 全角？ → 全角！ — standard Japanese 4-cycle.
-        CjCell.Punct(listOf('。', '、', '？', '！')),
+        CjCell.Punct(lettersPunctCycleFor(lang)),
     ),
     listOf(
-        CjCell.Plain("!#1"),
+        CjCell.SymbolLangSplit,
         CjCell.ConsonantGroup(CYCLES.getValue('ㅇ')),
         CjCell.Space,
-        CjCell.Globe,
+        CjCell.Hanja,
     ),
 )
+
+/**
+ * Numeric-page punctuation cycle on row 3 col 4.  ASCII counterpart of the
+ * letters page's 句点・読点 cycle — for when the user is typing numbers /
+ * URL-ish text and wants ASCII punct without a page hop.
+ */
+private val NUMERIC_PUNCT_CYCLE = listOf('.', ',', '-', '/')
+
+/**
+ * Common quick-access symbol on numeric / symbol pages, row 4 col 4
+ * (replaces 한자 from the letters page since hanja conversion isn't
+ * applicable here).
+ */
+private const val FREQ_SYMBOL = "?"
+
+/**
+ * Symbol pages — 3 rows × 6 symbols per page.  Each row's rightmost
+ * column on the rendered grid is filled by the numeric page's utility
+ * column (back / enter / punct cycle), so users can issue those actions
+ * without page-hopping.  Content varies by [InputLanguage]: KOREAN /
+ * ENGLISH use ASCII punctuation and `[]` brackets / `₩` won; JAPANESE
+ * substitutes `! ? . , ( )` with full-width `！ ？ 、 。 「 」` and
+ * `₩` with `¥` — derived from the Beolsik Korean / Japanese spec since
+ * "천지인 <- 두벌식" carries the same substitution rules over.
+ *
+ * Each row is `List<String>` (not `String`) so multi-codepoint glyphs
+ * with variation selectors stay grouped as one tappable key.
+ */
+private val KOR_CJ_SYM_1: List<List<String>> = listOf(
+    listOf("!", "?", ".", ",", "(", ")"),
+    listOf("@", ":", ";", "/", "-", "♡"),
+    listOf("*", "_", "%", "~", "^", "#"),
+)
+
+private val KOR_CJ_SYM_2: List<List<String>> = listOf(
+    listOf("+", "×", "÷", "=", "\"", "'"),
+    listOf("&", "♤", "☆", "♧", "\\", "₩"),
+    listOf("<", ">", "{", "}", "[", "]"),
+)
+
+private val KOR_CJ_SYM_3: List<List<String>> = listOf(
+    listOf("`", "|", "$", "€", "£", "¥"),
+    listOf("°", "○", "●", "□", "■", "◇"),
+    listOf("※", "《", "》", "¤", "¡", "¿"),
+)
+
+private val JPN_CJ_SYM_1: List<List<String>> = listOf(
+    listOf("！", "？", "、", "。", "「", "」"),
+    listOf("@", ":", ";", "/", "-", "♡"),
+    listOf("*", "_", "%", "~", "^", "#"),
+)
+
+private val JPN_CJ_SYM_2: List<List<String>> = listOf(
+    listOf("+", "×", "÷", "=", "\"", "'"),
+    listOf("&", "♤", "☆", "♧", "\\", "¥"),
+    listOf("<", ">", "{", "}", "[", "]"),
+)
+
+// Page 3 (decorative + currency) is identical across languages.
+private val CJ_SYM_3: List<List<String>> = KOR_CJ_SYM_3
+
+/** Returns `[page1, page2, page3]` for the current language. */
+private fun cjSymbolPagesFor(lang: InputLanguage): List<List<List<String>>> =
+    if (lang == InputLanguage.JAPANESE)
+        listOf(JPN_CJ_SYM_1, JPN_CJ_SYM_2, CJ_SYM_3)
+    else
+        listOf(KOR_CJ_SYM_1, KOR_CJ_SYM_2, CJ_SYM_3)
+
+/**
+ * Cheonjiin pages — accessed via the bottom-left split cell:
+ *  - LETTERS: 4×4 jamo keypad (default)
+ *  - NUMERIC: 4×4 phone-dialpad digits 1–9 / 0
+ *  - SYM_1 / SYM_2 / SYM_3: 7×4 symbol grids (6 symbols + utility column)
+ *
+ * Cycle from the bottom-left split-left half: NUMERIC → SYM_1 → SYM_2 →
+ * SYM_3 → NUMERIC.  Right half always returns to LETTERS.
+ */
+private enum class CjPage { LETTERS, NUMERIC, SYM_1, SYM_2, SYM_3 }
 
 @Composable
 fun CheonjiinLayout(
     tokens: KeyboardTokens,
     shape: KeyShape,
     onAction: (KeyAction) -> Unit = {},
+    inputLanguage: InputLanguage = InputLanguage.JAPANESE,
+    onLanguageCycle: () -> Unit = {},
+) {
+    var page by remember { mutableStateOf(CjPage.LETTERS) }
+    val symPages = cjSymbolPagesFor(inputLanguage)
+    when (page) {
+        CjPage.LETTERS -> CjLetters(
+            tokens = tokens,
+            shape = shape,
+            onAction = onAction,
+            onShowNumeric = { page = CjPage.NUMERIC },
+            inputLanguage = inputLanguage,
+            onLanguageCycle = onLanguageCycle,
+        )
+        CjPage.NUMERIC -> CjNumeric(
+            tokens = tokens,
+            shape = shape,
+            onAction = onAction,
+            onCyclePage = { page = CjPage.SYM_1 },
+            onBackToLetters = { page = CjPage.LETTERS },
+            inputLanguage = inputLanguage,
+        )
+        CjPage.SYM_1 -> CjSymbols(
+            tokens = tokens,
+            shape = shape,
+            onAction = onAction,
+            rows = symPages[0],
+            cyclePageLabel = "2/3",
+            onCyclePage = { page = CjPage.SYM_2 },
+            onBackToLetters = { page = CjPage.LETTERS },
+            inputLanguage = inputLanguage,
+        )
+        CjPage.SYM_2 -> CjSymbols(
+            tokens = tokens,
+            shape = shape,
+            onAction = onAction,
+            rows = symPages[1],
+            cyclePageLabel = "3/3",
+            onCyclePage = { page = CjPage.SYM_3 },
+            onBackToLetters = { page = CjPage.LETTERS },
+            inputLanguage = inputLanguage,
+        )
+        CjPage.SYM_3 -> CjSymbols(
+            tokens = tokens,
+            shape = shape,
+            onAction = onAction,
+            rows = symPages[2],
+            cyclePageLabel = "123",
+            onCyclePage = { page = CjPage.NUMERIC },
+            onBackToLetters = { page = CjPage.LETTERS },
+            inputLanguage = inputLanguage,
+        )
+    }
+}
+
+@Composable
+private fun CjLetters(
+    tokens: KeyboardTokens,
+    shape: KeyShape,
+    onAction: (KeyAction) -> Unit,
+    onShowNumeric: () -> Unit,
+    inputLanguage: InputLanguage,
+    onLanguageCycle: () -> Unit,
 ) {
     val gap = if (shape == KeyShape.FLAT) 0 else 5
     val pad = if (shape == KeyShape.FLAT) 0 else 8
@@ -82,30 +265,34 @@ fun CheonjiinLayout(
             .padding(pad.dp),
         verticalArrangement = Arrangement.spacedBy(gap.dp),
     ) {
-        GRID.forEach { row ->
-            Row(
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(gap.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+        lettersGridFor(inputLanguage).forEach { row ->
+            CjRow(gap = gap) {
                 row.forEach { cell ->
                     when (cell) {
-                        is CjCell.Vowel -> Key(
-                            tokens, shape, label = cell.stroke.toString(),
-                            onClick = { onAction(KeyAction.CjVowel(cell.stroke)) },
-                        )
-                        is CjCell.ConsonantGroup -> Key(
-                            tokens, shape,
-                            double = cell.displayPrimary to cell.displaySecondary,
-                            onClick = { onAction(KeyAction.CjConsonant(cell.cycle)) },
-                        )
+                        is CjCell.Vowel -> {
+                            val digit = DIGIT_BY_PRIMARY[cell.stroke]
+                            Key(
+                                tokens, shape, label = cell.stroke.toString(),
+                                onClick = { onAction(KeyAction.CjVowel(cell.stroke)) },
+                                onLongPress = digit?.let { d ->
+                                    { onAction(KeyAction.Commit(d)) }
+                                },
+                            )
+                        }
+                        is CjCell.ConsonantGroup -> {
+                            val digit = DIGIT_BY_PRIMARY[cell.cycle.first()]
+                            Key(
+                                tokens, shape,
+                                double = cell.displayPrimary to cell.displaySecondary,
+                                onClick = { onAction(KeyAction.CjConsonant(cell.cycle)) },
+                                onLongPress = digit?.let { d ->
+                                    { onAction(KeyAction.Commit(d)) }
+                                },
+                            )
+                        }
                         is CjCell.Punct -> Key(
                             tokens, shape, fn = true, label = cell.display,
                             onClick = { onAction(KeyAction.CjPunct(cell.cycle)) },
-                        )
-                        is CjCell.Plain -> Key(
-                            tokens, shape, fn = true, label = cell.label,
-                            onClick = { onAction(KeyAction.Symbols) },
                         )
                         CjCell.Backspace -> BackspaceKey(
                             tokens = tokens, shape = shape, weight = 1f,
@@ -115,17 +302,236 @@ fun CheonjiinLayout(
                             tokens, shape, fn = true,
                             onClick = { onAction(KeyAction.Enter) },
                         ) { EnterIcon(color = tokens.inkSoft) }
-                        CjCell.Globe -> Key(
-                            tokens, shape, fn = true,
-                            onClick = { onAction(KeyAction.SwitchIme) },
-                        ) { GlobeIcon(color = tokens.inkSoft) }
                         CjCell.Space -> SpaceKey(
                             tokens = tokens, shape = shape, weight = 1f,
+                            label = spaceLabelFor(inputLanguage),
                             onClick = { onAction(KeyAction.Space) },
+                        )
+                        CjCell.SymbolLangSplit -> SplitNavKey(
+                            tokens = tokens, shape = shape, gap = gap,
+                            // Letters page: left = enter numeric/symbols,
+                            // right = language cycle (한 → 영 → 일 → 한).
+                            // Long-press on right half opens the system IME
+                            // picker (escape hatch since Globe is gone).
+                            leftLabel = "문자",
+                            onLeftClick = onShowNumeric,
+                            rightLabel = langCycleLabelFor(inputLanguage),
+                            onRightClick = onLanguageCycle,
+                            onRightLongPress = { onAction(KeyAction.SwitchIme) },
+                        )
+                        CjCell.Hanja -> Key(
+                            tokens, shape, fn = true, label = "한자",
+                            // Trigger syllable-by-syllable kanji conversion
+                            // on the current run.  Wired later — placeholder
+                            // for now per the user's "일단 키만 놔두고
+                            // 작동은 나중에" request.
+                            onClick = { /* TODO: Hanja conversion */ },
                         )
                     }
                 }
             }
         }
     }
+}
+
+/**
+ * Numeric panel — 4×4 phone-dialpad layout.  Bottom-left split: left half
+ * cycles to symbol page 1, right half jumps back to letters (한).  Other
+ * action keys (Backspace / Enter / Space / Punct cycle) keep their letter-
+ * page positions for muscle memory.
+ */
+@Composable
+private fun CjNumeric(
+    tokens: KeyboardTokens,
+    shape: KeyShape,
+    onAction: (KeyAction) -> Unit,
+    onCyclePage: () -> Unit,
+    onBackToLetters: () -> Unit,
+    inputLanguage: InputLanguage,
+) {
+    val gap = if (shape == KeyShape.FLAT) 0 else 5
+    val pad = if (shape == KeyShape.FLAT) 0 else 8
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(pad.dp),
+        verticalArrangement = Arrangement.spacedBy(gap.dp),
+    ) {
+        CjRow(gap = gap) {
+            DigitKey(tokens, shape, "1", onAction)
+            DigitKey(tokens, shape, "2", onAction)
+            DigitKey(tokens, shape, "3", onAction)
+            BackspaceKey(
+                tokens = tokens, shape = shape, weight = 1f,
+                onTriggerBackspace = { onAction(KeyAction.Backspace) },
+            )
+        }
+        CjRow(gap = gap) {
+            DigitKey(tokens, shape, "4", onAction)
+            DigitKey(tokens, shape, "5", onAction)
+            DigitKey(tokens, shape, "6", onAction)
+            Key(
+                tokens, shape, fn = true,
+                onClick = { onAction(KeyAction.Enter) },
+            ) { EnterIcon(color = tokens.inkSoft) }
+        }
+        CjRow(gap = gap) {
+            DigitKey(tokens, shape, "7", onAction)
+            DigitKey(tokens, shape, "8", onAction)
+            DigitKey(tokens, shape, "9", onAction)
+            Key(
+                tokens, shape, fn = true, label = NUMERIC_PUNCT_CYCLE.joinToString(""),
+                onClick = { onAction(KeyAction.CjPunct(NUMERIC_PUNCT_CYCLE)) },
+            )
+        }
+        CjRow(gap = gap) {
+            // Numeric page: left = cycle to symbol page, right = back to letters.
+            SplitNavKey(
+                tokens = tokens, shape = shape, gap = gap,
+                leftLabel = "!@#",
+                onLeftClick = onCyclePage,
+                rightLabel = "한",
+                onRightClick = onBackToLetters,
+            )
+            DigitKey(tokens, shape, "0", onAction)
+            SpaceKey(tokens = tokens, shape = shape, weight = 1f,
+                label = spaceLabelFor(inputLanguage),
+                onClick = { onAction(KeyAction.Space) })
+            Key(tokens, shape, fn = true, label = FREQ_SYMBOL,
+                onClick = { onAction(KeyAction.Commit(FREQ_SYMBOL)) })
+        }
+    }
+}
+
+/**
+ * Symbol page — 7 cols × 4 rows.  Top 3 rows: 6 user-spec symbols + the
+ * numeric page's utility column (back / enter / punct cycle).  Bottom row:
+ * [split nav (weight=2)] [space (weight=4)] [freq symbol (weight=1)].
+ *
+ * @param rows 3 rows × 6 symbols each (the page's content grid).
+ * @param cyclePageLabel Label shown on the split-left half — indicates the
+ *   destination page (e.g. "2/3" on SYM_1, "123" on SYM_3).
+ */
+@Composable
+private fun CjSymbols(
+    tokens: KeyboardTokens,
+    shape: KeyShape,
+    onAction: (KeyAction) -> Unit,
+    rows: List<List<String>>,
+    cyclePageLabel: String,
+    onCyclePage: () -> Unit,
+    onBackToLetters: () -> Unit,
+    inputLanguage: InputLanguage,
+) {
+    val gap = if (shape == KeyShape.FLAT) 0 else 5
+    val pad = if (shape == KeyShape.FLAT) 0 else 8
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(pad.dp),
+        verticalArrangement = Arrangement.spacedBy(gap.dp),
+    ) {
+        // Row 1: 6 symbols + Backspace (rightmost utility col, same as numeric).
+        CjRow(gap = gap) {
+            rows[0].forEach { sym -> SymbolKey(tokens, shape, sym, onAction) }
+            BackspaceKey(
+                tokens = tokens, shape = shape, weight = 1f,
+                onTriggerBackspace = { onAction(KeyAction.Backspace) },
+            )
+        }
+        // Row 2: 6 symbols + Enter.
+        CjRow(gap = gap) {
+            rows[1].forEach { sym -> SymbolKey(tokens, shape, sym, onAction) }
+            Key(
+                tokens, shape, fn = true,
+                onClick = { onAction(KeyAction.Enter) },
+            ) { EnterIcon(color = tokens.inkSoft) }
+        }
+        // Row 3: 6 symbols + ASCII punct cycle.
+        CjRow(gap = gap) {
+            rows[2].forEach { sym -> SymbolKey(tokens, shape, sym, onAction) }
+            Key(
+                tokens, shape, fn = true, label = NUMERIC_PUNCT_CYCLE.joinToString(""),
+                onClick = { onAction(KeyAction.CjPunct(NUMERIC_PUNCT_CYCLE)) },
+            )
+        }
+        // Row 4: split (2 weights) + space (4 weights) + freq symbol (1 weight).
+        // Total = 7 weights, aligning the row to the 7-col rows above.
+        CjRow(gap = gap) {
+            SplitNavKey(
+                tokens = tokens, shape = shape, gap = gap, weight = 2f,
+                leftLabel = cyclePageLabel,
+                onLeftClick = onCyclePage,
+                rightLabel = "한",
+                onRightClick = onBackToLetters,
+            )
+            SpaceKey(tokens = tokens, shape = shape, weight = 4f,
+                label = spaceLabelFor(inputLanguage),
+                onClick = { onAction(KeyAction.Space) })
+            Key(tokens, shape, fn = true, label = FREQ_SYMBOL,
+                onClick = { onAction(KeyAction.Commit(FREQ_SYMBOL)) })
+        }
+    }
+}
+
+@Composable
+private fun RowScope.DigitKey(
+    tokens: KeyboardTokens,
+    shape: KeyShape,
+    digit: String,
+    onAction: (KeyAction) -> Unit,
+) = Key(tokens, shape, label = digit, onClick = { onAction(KeyAction.Commit(digit)) })
+
+@Composable
+private fun RowScope.SymbolKey(
+    tokens: KeyboardTokens,
+    shape: KeyShape,
+    sym: String,
+    onAction: (KeyAction) -> Unit,
+) = Key(tokens, shape, label = sym, onClick = { onAction(KeyAction.Commit(sym)) })
+
+/**
+ * One grid cell split into two half-keys.  Outer Row weights against the
+ * keypad row by [weight]; each child Key weights against the inner Row at
+ * `1f`, so they share the slot 50/50 regardless of column count.
+ */
+@Composable
+private fun RowScope.SplitNavKey(
+    tokens: KeyboardTokens,
+    shape: KeyShape,
+    gap: Int,
+    weight: Float = 1f,
+    leftLabel: String,
+    onLeftClick: () -> Unit,
+    rightLabel: String,
+    onRightClick: () -> Unit,
+    onRightLongPress: (() -> Unit)? = null,
+) {
+    Row(
+        modifier = Modifier.weight(weight).fillMaxHeight(),
+        horizontalArrangement = Arrangement.spacedBy(gap.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Key(tokens, shape, fn = true, label = leftLabel, onClick = onLeftClick)
+        Key(
+            tokens, shape, fn = true, label = rightLabel,
+            onClick = onRightClick,
+            onLongPress = onRightLongPress,
+        )
+    }
+}
+
+@Composable
+private fun ColumnScope.CjRow(
+    gap: Int,
+    content: @Composable RowScope.() -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().weight(1f),
+        horizontalArrangement = Arrangement.spacedBy(gap.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        content = content,
+    )
 }

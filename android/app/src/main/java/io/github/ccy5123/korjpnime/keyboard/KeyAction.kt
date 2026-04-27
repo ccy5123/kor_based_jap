@@ -42,6 +42,13 @@ sealed class KeyAction {
     /** Commit a single space. */
     object Space : KeyAction()
 
+    /** Move the editor caret one position left.  Used by Japanese symbol pages
+     *  per the user's "스페이스바 양옆 커서 이동" spec. */
+    object CursorLeft : KeyAction()
+
+    /** Move the editor caret one position right. */
+    object CursorRight : KeyAction()
+
     /** Switch to the next system IME (globe key). */
     object SwitchIme : KeyAction()
 
