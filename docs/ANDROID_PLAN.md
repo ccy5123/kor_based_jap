@@ -134,6 +134,104 @@ calling `super.onAttachedToWindow()` (which is what kicks off
 composition).  This is the same pattern Florisboard / Tipal / other
 Compose-based IMEs use.
 
+### D3 plan -- "Hangul composer wired in, ㅎㅏㄴ → 한"
+
+Slice of M1 between D2 (raw jamo emit) and "Korean syllables surface
+as preedit, then commit on syllable completion".  D3 stops at
+**한** (composed Hangul); kana conversion stays in M2.
+
+**State machine** (port `tsf/src/HangulComposer.cpp` ~406 LOC verbatim):
+
+3-state composer carrying `(cho, jung, jong)` indices plus `rawJung` /
+`rawJong` for compound detection.  Transitions EMPTY → CHO_ONLY →
+CHO_JUNG → CHO_JUNG_JONG, with recursive restart on incompatible
+input.  API:
+
+- `input(jamo: Char): String` — consumes one jamo, returns the
+  finalized syllable iff one was emitted (else empty string)
+- `preedit(): String` — current in-progress syllable (for
+  `setComposingText`)
+- `flush(): String` — emit pending state and reset (call on
+  non-Korean input, mode switch, focus loss)
+- `undoLastJamo(): String` — backspace; peels one jamo, simplifying
+  compound jong first
+- `empty(): Boolean`
+
+**Batchim split / combine** (port `tsf/src/BatchimLookup.h` ~204 LOC):
+
+Two responsibilities, kept separate from main composer:
+
+1. `splitCompoundJong(jong: Int): Pair<Int, Int>?` — when a vowel
+   arrives after a compound coda (ㄳ ㄵ ㄶ ㄺ ㄻ ㄼ ㄽ ㄾ ㄿ ㅀ ㅄ),
+   split: first part stays as current syllable's jong, second part
+   migrates to the next syllable's cho.
+2. `suffix(jong: Int, nextCho: Int?): String` — kana suffix lookup
+   (ん っ る ...) — needed for **M2**, not D3.  Port the table now
+   but only call it once we have kana mapping.
+
+**Tables** — port the generated `tsf/generated/{mapping_table,
+batchim_rules}.h` directly to a Kotlin singleton holding `Map`s.
+Reasoning: ~250 entries total, change rarely (~once per 6 months),
+and a build-time YAML→Kotlin generator is more brittle than the data.
+If coverage expands past ~500 entries we'll revisit.
+
+**File layout** (mirrors Windows tree):
+
+```
+android/app/src/main/java/io/github/ccy5123/korjpnime/engine/
+  HangulComposer.kt          ~380 LOC   3-state composer (jamo → syllable)
+  BatchimLookup.kt           ~200 LOC   compound jong split + suffix
+  SyllableTables.kt          ~220 LOC   hardcoded jamo / compound / suffix maps
+```
+
+**Wiring** — hook into [`KorJpnImeService.handleAction`](../android/app/src/main/java/io/github/ccy5123/korjpnime/KorJpnImeService.kt):
+
+- Add `private val composer = HangulComposer()` as a service field
+  (state survives across taps; reset on `onFinishInputView` /
+  mode switch)
+- `KeyAction.Commit(jamo)` → if `jamo.isHangulJamo()`:
+  `val finalized = composer.input(jamo[0])` —
+  `if (finalized.isNotEmpty()) ic.commitText(finalized, 1)` then
+  `ic.setComposingText(composer.preedit(), 1)`
+- `KeyAction.Commit(",")` / `"."` etc. → `composer.flush()` first,
+  then commit the punctuation
+- `KeyAction.Backspace` → if composer non-empty,
+  `composer.undoLastJamo()` + `setComposingText`; else
+  `deleteSurroundingText`
+- `KeyAction.Space` / `Enter` → `flush()` then proceed
+- `KeyAction.SwitchIme` → `flush()` first
+
+**Windows-specific to skip**: TSF / COM / GUIDs / `KeyHandler` glue /
+`DllRegisterServer`.  Pure Kotlin port; no JNI.
+
+**Edge cases the porter MUST preserve**:
+
+1. **Particle markers** (`HangulComposer.cpp` ~L226–235): when
+   cho=11 (silent ㅇ) and vowel is doubled (ㅗ+ㅗ, ㅘ+ㅏ, ㅔ+ㅔ),
+   emit sentinels `kWoMarker` / `kWaMarker` / `kEMarker`. KeyHandler
+   maps these to を / は / へ — D3 stops at Hangul so we can either
+   port the markers as inert constants or drop them with a `// M2`
+   note.  Pick the marker route to avoid re-deriving later.
+2. **따따 fix** (~L250–252): after emitting 따, recurse into
+   `input(jamo)` on reset state — do **not** hard-code cho=11.
+3. **Compound jong split priority** (~L267–283): when coda is
+   compound and a vowel arrives, the compound MUST split.  If the
+   code falls through to "single jong migration" instead, ㄵ+ㅣ
+   loses ㄴ.
+4. **Raw jamo fields** for vowel fusion (ㅗ+ㅏ → ㅘ) are looked up
+   by raw jamo char, not by index.  Don't optimize them away.
+5. **Backspace simplifies compounds first** (~L376): ㄳ → ㄱ, then
+   remove.  Matches user mental model.
+
+**Out of scope for D3** (still M1 closeout / M2):
+
+- 쌍자음 / Shift state machine (lands alongside HangulComposer since
+  Shift+ㄱ → ㄲ feeds the same composer)
+- Cheonjiin multi-tap consonant cycling + vowel composition
+- DataStore-backed mode preference + Settings screen
+- kana conversion (M2) — `BatchimLookup.suffix()` table ports here
+  but isn't called yet
+
 ### M2 -- "Kanji conversion via the simple dict"
 
 - [ ] Bundle `dict/jpn_dict.txt` in `assets/`
@@ -226,15 +324,25 @@ where Android Studio reads from; the WSL worktree is no longer the
 source of truth), then paste:
 
 ```
-이전 세션에서 Android M1 의 키보드 UI 까지 완성했어.
+이전 세션에서 Android D2 까지 완성 — IME 가 Note20 Ultra 5G (Android 13)
+에서 정상 동작, raw 자모 (ㅎ ㅏ ㄴ) 가 editor 에 그대로 찍힘 (한글 합성은 D3).
 repo: https://github.com/ccy5123/kor_based_jap (작업 경로 C:\dev\kor_based_jap)
-폰: Galaxy Note20 Ultra 5G, Android 13
-픽한 design direction: d1 Stratus (cool blue, rounded square, chip strip)
-ANDROID_PLAN.md 의 M1 체크리스트에서 키보드 view + 14개 @Preview 까지 ✓.
+디자인: d1 Stratus (cool blue, rounded square, chip strip) 하드코딩 — 모드 토글은 M1 끝물 DataStore 작업
 
-다음으로 D2 — IME 가 실제로 폰에서 동작하게:
-- KorJpnImeService.onCreateInputView() 에 ComposeView 호스팅
-  (lifecycle / SavedStateRegistry / ViewModelStore owner 셋업 포함)
-- 키 탭 → InputConnection.commitText (raw 자모 출력만; 한글 합성은 D3)
-- Note20 Ultra 에 sideload + 메모장에서 입력 검증
+memory/ 에 빌드 환경 (gradle wrapper / JBR / ANDROID_HOME / TEMP 우회)
++ IME 호스팅 교훈 (parentPanel 트랩 / AbstractComposeView 패턴) 저장됨.
+
+다음으로 D3 — Hangul composer 포팅 (ㅎ+ㅏ+ㄴ → 한):
+- engine/HangulComposer.kt (~380 LOC) — tsf/src/HangulComposer.cpp 의
+  3-state machine verbatim 포팅
+- engine/BatchimLookup.kt (~200 LOC) — tsf/src/BatchimLookup.h
+- engine/SyllableTables.kt (~220 LOC) — tsf/generated/{mapping_table,
+  batchim_rules}.h 데이터를 Kotlin Map 으로 (build-time generator
+  대신 hardcode — 데이터가 6개월에 한 번 바뀜)
+- KorJpnImeService.handleAction 을 composer.input(jamo) →
+  setComposingText (preedit) / commitText (finalized) 패턴으로 재배선
+
+D3 는 한글 합성에서 멈춤 (가나 변환은 M2).  상세 플랜 + 5개 edge case
+(따따 버그 / particle marker / compound jong split / raw jamo fusion /
+backspace 우선순위) → ANDROID_PLAN.md 의 "D3 plan" 섹션.
 ```
