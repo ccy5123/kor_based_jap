@@ -38,6 +38,13 @@ android {
     buildFeatures {
         compose = true
     }
+
+    // jpn_dict.txt is 19 MB plain text — keep it uncompressed in the APK so
+    // the in-process Dictionary loader can read the asset in one shot
+    // without paying the inflate cost on every IME warm-up.
+    androidResources {
+        noCompress.add("txt")
+    }
 }
 
 dependencies {
@@ -47,6 +54,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.savedstate.ktx)
+    implementation(libs.androidx.datastore.preferences)
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)

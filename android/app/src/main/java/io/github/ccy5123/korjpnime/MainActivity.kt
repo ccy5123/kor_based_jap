@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import io.github.ccy5123.korjpnime.keyboard.KeyboardSurface
 import io.github.ccy5123.korjpnime.theme.DIRECTIONS
 import io.github.ccy5123.korjpnime.theme.KeyboardMode
+import io.github.ccy5123.korjpnime.ui.SettingsActivity
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -39,6 +40,9 @@ class MainActivity : ComponentActivity() {
                         onOpenInputSettings = {
                             startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
                         },
+                        onOpenKeyboardSettings = {
+                            startActivity(Intent(this, SettingsActivity::class.java))
+                        },
                     )
                 }
             }
@@ -47,7 +51,10 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun EnableImeScreen(onOpenInputSettings: () -> Unit) {
+private fun EnableImeScreen(
+    onOpenInputSettings: () -> Unit,
+    onOpenKeyboardSettings: () -> Unit,
+) {
     val direction = DIRECTIONS.first()
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -73,6 +80,10 @@ private fun EnableImeScreen(onOpenInputSettings: () -> Unit) {
         Spacer(Modifier.height(20.dp))
         Button(onClick = onOpenInputSettings) {
             Text("입력 방식 설정 열기")
+        }
+        Spacer(Modifier.height(8.dp))
+        Button(onClick = onOpenKeyboardSettings) {
+            Text("키보드 설정 (레이아웃 / 햅틱)")
         }
         Spacer(Modifier.height(40.dp))
         Text(

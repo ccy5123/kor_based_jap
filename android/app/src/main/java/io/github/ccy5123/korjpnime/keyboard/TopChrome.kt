@@ -1,6 +1,7 @@
 package io.github.ccy5123.korjpnime.keyboard
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -23,7 +24,10 @@ import io.github.ccy5123.korjpnime.theme.KeyboardTokens
 
 /** Top chrome bar above the candidate strip. */
 @Composable
-fun TopChrome(tokens: KeyboardTokens) {
+fun TopChrome(
+    tokens: KeyboardTokens,
+    onSettingsClick: (() -> Unit)? = null,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -53,7 +57,14 @@ fun TopChrome(tokens: KeyboardTokens) {
                 letterSpacing = 0.7.sp,
             )
         }
-        SettingsGearIcon(color = tokens.inkSoft)
+        Box(
+            modifier = Modifier
+                .size(20.dp)
+                .let { if (onSettingsClick != null) it.clip(CircleShape).clickable(onClick = onSettingsClick) else it },
+            contentAlignment = Alignment.Center,
+        ) {
+            SettingsGearIcon(color = tokens.inkSoft)
+        }
     }
 }
 

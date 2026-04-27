@@ -1,17 +1,18 @@
 package io.github.ccy5123.korjpnime.keyboard
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -28,12 +29,13 @@ import androidx.compose.ui.unit.sp
 import io.github.ccy5123.korjpnime.theme.KeyboardTokens
 import io.github.ccy5123.korjpnime.theme.StripTreatment
 
-private val SAMPLES = listOf("こんにちは", "今日は", "コンニチハ", "今日輪")
-
 @Composable
 fun CandidateStrip(
     tokens: KeyboardTokens,
     treatment: StripTreatment,
+    candidates: List<String> = emptyList(),
+    onPick: (String) -> Unit = {},
+    onExpand: (() -> Unit)? = null,
 ) {
     val baseModifier = Modifier
         .fillMaxWidth()
@@ -52,41 +54,72 @@ fun CandidateStrip(
     } else baseModifier
 
     Row(
-        modifier = withBorder.padding(horizontal = 10.dp),
+        modifier = withBorder,
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = if (treatment == StripTreatment.CHIP)
-            Arrangement.spacedBy(6.dp) else Arrangement.Start,
     ) {
-        SAMPLES.forEachIndexed { i, c ->
-            val selected = i == 0
-            when (treatment) {
-                StripTreatment.CHIP -> ChipCandidate(c, selected, tokens)
-                StripTreatment.UNDERLINE -> UnderlineCandidate(c, selected, tokens)
-                StripTreatment.HAIRLINE -> {
-                    HairlineCandidate(c, selected, tokens)
-                    if (i < SAMPLES.lastIndex) {
-                        Box(
-                            modifier = Modifier
-                                .width(1.dp)
-                                .height(14.dp)
-                                .background(tokens.hairline),
-                        )
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = if (treatment == StripTreatment.CHIP)
+                Arrangement.spacedBy(6.dp) else Arrangement.Start,
+        ) {
+            candidates.forEachIndexed { i, c ->
+                val selected = i == 0
+                val pickModifier = Modifier.clickable { onPick(c) }
+                when (treatment) {
+                    StripTreatment.CHIP -> ChipCandidate(c, selected, tokens, pickModifier)
+                    StripTreatment.UNDERLINE -> UnderlineCandidate(c, selected, tokens, pickModifier)
+                    StripTreatment.HAIRLINE -> {
+                        HairlineCandidate(c, selected, tokens, pickModifier)
+                        if (i < candidates.lastIndex) {
+                            Box(
+                                modifier = Modifier
+                                    .width(1.dp)
+                                    .height(14.dp)
+                                    .background(tokens.hairline),
+                            )
+                        }
                     }
+                    StripTreatment.FLUSH -> FlushCandidate(c, selected, tokens, pickModifier)
                 }
-                StripTreatment.FLUSH -> FlushCandidate(c, selected, tokens)
             }
         }
-        Box(modifier = Modifier.weight(1f).height(1.dp))
-        ChipChevron(color = tokens.inkSoft)
+        if (candidates.isNotEmpty() && onExpand != null) {
+            Box(
+                modifier = Modifier
+                    .padding(end = 8.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(tokens.keyAlt)
+                    .clickable(onClick = onExpand)
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "▾",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = tokens.inkSoft,
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun ChipCandidate(text: String, selected: Boolean, tokens: KeyboardTokens) {
+private fun ChipCandidate(
+    text: String,
+    selected: Boolean,
+    tokens: KeyboardTokens,
+    interactive: Modifier = Modifier,
+) {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
             .background(if (selected) tokens.accent else tokens.keyAlt)
+            .then(interactive)
             .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
         Text(
@@ -99,9 +132,16 @@ private fun ChipCandidate(text: String, selected: Boolean, tokens: KeyboardToken
 }
 
 @Composable
-private fun UnderlineCandidate(text: String, selected: Boolean, tokens: KeyboardTokens) {
+private fun UnderlineCandidate(
+    text: String,
+    selected: Boolean,
+    tokens: KeyboardTokens,
+    interactive: Modifier = Modifier,
+) {
     Box(
-        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+        modifier = Modifier
+            .then(interactive)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
         Text(
             text = text,
@@ -122,8 +162,13 @@ private fun UnderlineCandidate(text: String, selected: Boolean, tokens: Keyboard
 }
 
 @Composable
-private fun HairlineCandidate(text: String, selected: Boolean, tokens: KeyboardTokens) {
-    Box(modifier = Modifier.padding(horizontal = 12.dp)) {
+private fun HairlineCandidate(
+    text: String,
+    selected: Boolean,
+    tokens: KeyboardTokens,
+    interactive: Modifier = Modifier,
+) {
+    Box(modifier = Modifier.then(interactive).padding(horizontal = 12.dp)) {
         Text(
             text = text,
             fontSize = 12.sp,
@@ -134,9 +179,14 @@ private fun HairlineCandidate(text: String, selected: Boolean, tokens: KeyboardT
 }
 
 @Composable
-private fun FlushCandidate(text: String, selected: Boolean, tokens: KeyboardTokens) {
+private fun FlushCandidate(
+    text: String,
+    selected: Boolean,
+    tokens: KeyboardTokens,
+    interactive: Modifier = Modifier,
+) {
     Column(
-        modifier = Modifier.padding(horizontal = 11.dp),
+        modifier = Modifier.then(interactive).padding(horizontal = 11.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {

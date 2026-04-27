@@ -116,7 +116,7 @@ fun RowScope.Key(
     }
 }
 
-private fun Modifier.divider(color: Color): Modifier = this.drawBehind {
+internal fun Modifier.divider(color: Color): Modifier = this.drawBehind {
     val strokePx = 1f
     // right edge
     drawLine(
