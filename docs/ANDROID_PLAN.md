@@ -22,7 +22,7 @@ rather than silently deviating in code.
 | Repo layout | **Same repo, `android/` subfolder** | Single source of truth for shared assets (`dict/`, `mapping/`); Windows + Android release tags can diverge |
 | Dictionary distribution | **Bundle in APK** for v1 (jpn_dict.txt, ~18 MB) | Zero-network install, modest APK growth.  Defer kj_*.bin (~71 MB) until users ask |
 | Distribution channel | **GitHub Releases (signed APK)** for beta → Google Play after stabilization | Iterate fast without Play store review; Play later for discoverability |
-| Input methods | **2-beolsik (두벌식) + Cheonjiin (천지인)** | Two-beolsik covers desktop-typist users (matches the Windows TSF version); Cheonjiin is the default mobile Korean input on Samsung phones — Note20-class users would expect it.  User picks per-session via in-keyboard mode toggle, default persisted in DataStore |
+| Input methods | **2-beolsik (두벌식) + Cheonjiin (천지인)** | Two-beolsik covers desktop-typist users (matches the Windows TSF version); Cheonjiin is the default mobile Korean input on Samsung phones — Note20-class users would expect it.  User picks one of the two layouts in **Settings → 입력 방식 → 한글 키보드 레이아웃**; the keyboard surface itself shows no mode toggle (decision from 2026-04-27 Claude Design session — "most users settle on one layout for life; on-keyboard toggle wastes a slot, adds noise, risks accidental swaps mid-message"). Selection persisted in DataStore |
 
 ## Milestones
 
@@ -34,19 +34,21 @@ type Korean jamo, see hiragana committed.  No kanji conversion yet.
 - [ ] Android Studio project skeleton under `android/`
 - [ ] AndroidManifest registers an `InputMethodService`
 - [ ] Compose-based **2-beolsik** keyboard view (32 jamo keys + Shift /
-      Backspace / Space / Enter / Switch-IME / Mode-toggle)
+      Backspace / Space / Enter / function row with !#1 / globe /
+      `,` / `.`)
 - [ ] Compose-based **천지인 (Cheonjiin)** keyboard view (3×4 grid:
       9 consonant-group keys + ㅣ ㆍ ㅡ vowel column + Backspace /
-      Space / Mode-toggle)
+      Space / Enter / globe)
 - [ ] **Cheonjiin state machine** (NEW — no Windows ancestor):
       multi-tap consonant cycling (ㄱ→ㅋ→ㄲ etc.), vowel composition
       (ㅣ + ㆍ → ㅏ etc.), tap-timeout reset.  Output: jamo stream
       that feeds the same HangulComposer downstream
-- [ ] Mode-toggle UX (final choice from Day-1 Claude Design pick:
-      dedicated toggle key OR long-press Switch-IME OR space-bar
-      swipe)
-- [ ] User mode preference persisted via DataStore (default 천지인
-      to match Samsung muscle memory; user can switch)
+- [ ] **Settings screen** (Compose) — 입력 방식 page with 한글 키보드
+      레이아웃 picker: two ModeCards (두벌식 / 천지인) with mini-preview
+      and radio selection, plus Japanese candidates / Theme / Haptics
+      rows.  This is the *only* place the user switches modes
+- [ ] User mode preference persisted via DataStore (default 두벌식;
+      Settings card flips it)
 - [ ] Port `tsf/src/HangulComposer.cpp` (~400 LOC) to Kotlin verbatim
       — shared by both modes
 - [ ] Port `tsf/src/BatchimLookup.h` (~200 LOC) to Kotlin
@@ -120,7 +122,9 @@ Android-only additions, not derived from any TSF source file:
 | `CheonjiinLayout.kt` | ~100 | 3×4 Compose grid; large keys for one-handed thumb reach |
 | `BeolsikLayout.kt` | ~150 | 4×11 Compose grid for the standard 두벌식 layout |
 | `KeyboardModePreference.kt` | ~50 | DataStore-backed `KeyboardMode` enum (BEOLSIK / CHEONJIIN); observes mode flow |
-| `ModeToggle.kt` | ~50 | Mode-switch UI element (final form depends on Day-1 mockup choice) |
+| `SettingsScreen.kt` | ~250 | Settings activity Compose screen with mode picker (two ModeCards w/ mini-preview), Japanese-candidates row, theme row, haptics toggle |
+| `OklchColor.kt` | ~50 | Single-hue OKLCH → sRGB conversion for the design's parametric token system |
+| `KeyboardTheme.kt` | ~150 | `DirectionPalette` + `tokens(palette, dark)` returning 11 colour tokens (ports the Claude Design `tokens()` function) |
 
 ## UI design notes
 
