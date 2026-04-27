@@ -4,6 +4,7 @@ import android.inputmethodservice.InputMethodService
 import android.os.Build
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.material3.MaterialTheme
 import androidx.lifecycle.Lifecycle
@@ -14,16 +15,16 @@ import androidx.lifecycle.ViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
+import io.github.ccy5123.korjpnime.engine.HangulComposer
 import io.github.ccy5123.korjpnime.keyboard.KeyAction
 import io.github.ccy5123.korjpnime.keyboard.KeyboardSurface
 import io.github.ccy5123.korjpnime.theme.DIRECTIONS
 import io.github.ccy5123.korjpnime.theme.KeyboardMode
 
 /**
- * D2: hosts a ComposeView containing [KeyboardSurface] and routes taps to
- * the active [android.view.inputmethod.InputConnection].
- *
- * D2 emits raw jamo (no Hangul composition). The Hangul composer hooks in at D3.
+ * D3: routes key taps through a [HangulComposer] so that ㅎ ㅏ ㄴ becomes 한
+ * (composed Hangul as preedit, committed when the syllable closes).  Kana
+ * conversion still lives in M2.
  *
  * Mode/direction are hard-coded to d1 Stratus + 두벌식; the Settings screen
  * will flip these via DataStore at M1's tail.
@@ -41,6 +42,12 @@ class KorJpnImeService :
     private val lifecycleRegistry = LifecycleRegistry(this)
     private val savedStateRegistryController = SavedStateRegistryController.create(this)
     private val store = ViewModelStore()
+
+    /**
+     * Hangul composer state.  Survives across taps on the same edit field.
+     * Reset on focus loss ([onFinishInputView]) and on [KeyAction.SwitchIme].
+     */
+    private val composer = HangulComposer()
 
     override val lifecycle: Lifecycle get() = lifecycleRegistry
     override val viewModelStore: ViewModelStore get() = store
@@ -68,6 +75,16 @@ class KorJpnImeService :
         }
     }
 
+    override fun onFinishInputView(finishingInput: Boolean) {
+        // Editor lost focus / IME hidden — commit any pending syllable into
+        // the now-fading field, then drop composer state so the next field
+        // starts clean.  Without this the next field would carry a stale
+        // (cho, jung, jong) trio.
+        currentInputConnection?.let { flushComposer(it) }
+        composer.reset()
+        super.onFinishInputView(finishingInput)
+    }
+
     override fun onDestroy() {
         lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
         store.clear()
@@ -77,14 +94,44 @@ class KorJpnImeService :
     private fun handleAction(action: KeyAction) {
         val ic = currentInputConnection ?: return
         when (action) {
-            is KeyAction.Commit -> ic.commitText(action.text, 1)
-            KeyAction.Space -> ic.commitText(" ", 1)
-            KeyAction.Backspace -> ic.deleteSurroundingText(1, 0)
-            KeyAction.Enter -> handleEnter()
-            KeyAction.SwitchIme -> switchIme()
-            KeyAction.Shift -> Unit       // D3+
+            is KeyAction.Commit -> handleCommit(ic, action.text)
+            KeyAction.Space -> { flushComposer(ic); ic.commitText(" ", 1) }
+            KeyAction.Backspace -> handleBackspace(ic)
+            KeyAction.Enter -> { flushComposer(ic); handleEnter() }
+            KeyAction.SwitchIme -> { flushComposer(ic); switchIme() }
+            KeyAction.Shift -> Unit       // 쌍자음 lands with Shift state machine (M1 closeout)
             KeyAction.Symbols -> Unit     // future milestone
         }
+    }
+
+    private fun handleCommit(ic: InputConnection, text: String) {
+        if (text.length == 1 && HangulComposer.isHangulJamo(text[0])) {
+            val finalized = composer.input(text[0])
+            if (finalized.isNotEmpty()) ic.commitText(finalized, 1)
+            ic.setComposingText(composer.preedit(), 1)
+        } else {
+            // Punctuation, digits, kana, anything non-jamo — flush in-progress
+            // syllable first so it commits BEFORE the new text.
+            flushComposer(ic)
+            ic.commitText(text, 1)
+        }
+    }
+
+    private fun handleBackspace(ic: InputConnection) {
+        if (!composer.empty()) {
+            composer.undoLastJamo()
+            // Empty preedit clears the composing region; non-empty replaces it.
+            ic.setComposingText(composer.preedit(), 1)
+        } else {
+            ic.deleteSurroundingText(1, 0)
+        }
+    }
+
+    /** Commit any in-progress syllable and clear the composing region. */
+    private fun flushComposer(ic: InputConnection) {
+        if (composer.empty()) return
+        val flushed = composer.flush()
+        if (flushed.isNotEmpty()) ic.commitText(flushed, 1)
     }
 
     private fun handleEnter() {
