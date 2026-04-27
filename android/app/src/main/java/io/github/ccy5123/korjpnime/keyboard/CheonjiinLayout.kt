@@ -10,16 +10,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import io.github.ccy5123.korjpnime.engine.CheonjiinComposer
 import io.github.ccy5123.korjpnime.theme.KeyShape
 import io.github.ccy5123.korjpnime.theme.KeyboardTokens
 
-// 4 rows × 4 cols. Cells are either:
-//  - String  → label (vowel or special label like "!#1")
-//  - Pair<String,String> → multi-tap consonant group (renders both, primary on bottom)
-//  - SpecialKey → backspace / enter / globe / space
+// 4 rows × 4 cols.  ConsonantGroup carries its full multi-tap cycle (e.g.,
+// [ㄱ, ㅋ, ㄲ]); the layout shows the first two on the key face but the
+// service-side state machine (CheonjiinComposer) walks the full cycle.
 private sealed class CjCell {
-    data class Vowel(val label: String) : CjCell()
-    data class ConsonantGroup(val primary: String, val secondary: String) : CjCell()
+    data class Vowel(val stroke: Char) : CjCell()
+    data class ConsonantGroup(val cycle: List<Char>) : CjCell() {
+        val displayPrimary: String get() = cycle[0].toString()
+        val displaySecondary: String get() = cycle.getOrNull(1)?.toString() ?: ""
+    }
+    /** Multi-tap punctuation cycle — typically `.`, `,`, `?`, `!`. */
+    data class Punct(val cycle: List<Char>) : CjCell() {
+        val display: String get() = cycle.joinToString("")
+    }
+    /** Symbols / numbers page — placeholder until M2 wires the page. */
     data class Plain(val label: String) : CjCell()
     object Backspace : CjCell()
     object Enter : CjCell()
@@ -27,28 +35,32 @@ private sealed class CjCell {
     object Space : CjCell()
 }
 
+// Pull cycles from the composer's authoritative table so the keypad and the
+// state machine never drift.
+private val CYCLES = CheonjiinComposer.CONSONANT_CYCLES
+
 private val GRID: List<List<CjCell>> = listOf(
     listOf(
-        CjCell.Vowel("ㅣ"),
-        CjCell.Vowel("ㆍ"),
-        CjCell.Vowel("ㅡ"),
+        CjCell.Vowel(CheonjiinComposer.STROKE_I),
+        CjCell.Vowel(CheonjiinComposer.STROKE_DOT),
+        CjCell.Vowel(CheonjiinComposer.STROKE_EU),
         CjCell.Backspace,
     ),
     listOf(
-        CjCell.ConsonantGroup("ㄱ", "ㅋ"),
-        CjCell.ConsonantGroup("ㄴ", "ㄹ"),
-        CjCell.ConsonantGroup("ㄷ", "ㅌ"),
+        CjCell.ConsonantGroup(CYCLES.getValue('ㄱ')),
+        CjCell.ConsonantGroup(CYCLES.getValue('ㄴ')),
+        CjCell.ConsonantGroup(CYCLES.getValue('ㄷ')),
         CjCell.Enter,
     ),
     listOf(
-        CjCell.ConsonantGroup("ㅂ", "ㅍ"),
-        CjCell.ConsonantGroup("ㅅ", "ㅎ"),
-        CjCell.ConsonantGroup("ㅈ", "ㅊ"),
-        CjCell.Plain(".,?!"),
+        CjCell.ConsonantGroup(CYCLES.getValue('ㅂ')),
+        CjCell.ConsonantGroup(CYCLES.getValue('ㅅ')),
+        CjCell.ConsonantGroup(CYCLES.getValue('ㅈ')),
+        CjCell.Punct(listOf('.', ',', '?', '!')),
     ),
     listOf(
         CjCell.Plain("!#1"),
-        CjCell.ConsonantGroup("ㅇ", "ㅁ"),
+        CjCell.ConsonantGroup(CYCLES.getValue('ㅇ')),
         CjCell.Space,
         CjCell.Globe,
     ),
@@ -78,23 +90,26 @@ fun CheonjiinLayout(
                 row.forEach { cell ->
                     when (cell) {
                         is CjCell.Vowel -> Key(
-                            tokens, shape, label = cell.label,
-                            onClick = { onAction(KeyAction.Commit(cell.label)) },
+                            tokens, shape, label = cell.stroke.toString(),
+                            onClick = { onAction(KeyAction.CjVowel(cell.stroke)) },
                         )
-                        // D2: emit primary jamo only; multi-tap cycling is D3.
                         is CjCell.ConsonantGroup -> Key(
                             tokens, shape,
-                            double = cell.primary to cell.secondary,
-                            onClick = { onAction(KeyAction.Commit(cell.primary)) },
+                            double = cell.displayPrimary to cell.displaySecondary,
+                            onClick = { onAction(KeyAction.CjConsonant(cell.cycle)) },
+                        )
+                        is CjCell.Punct -> Key(
+                            tokens, shape, fn = true, label = cell.display,
+                            onClick = { onAction(KeyAction.CjPunct(cell.cycle)) },
                         )
                         is CjCell.Plain -> Key(
                             tokens, shape, fn = true, label = cell.label,
                             onClick = { onAction(KeyAction.Symbols) },
                         )
-                        CjCell.Backspace -> Key(
-                            tokens, shape, fn = true,
-                            onClick = { onAction(KeyAction.Backspace) },
-                        ) { BackspaceIcon(color = tokens.inkSoft) }
+                        CjCell.Backspace -> BackspaceKey(
+                            tokens = tokens, shape = shape, weight = 1f,
+                            onTriggerBackspace = { onAction(KeyAction.Backspace) },
+                        )
                         CjCell.Enter -> Key(
                             tokens, shape, fn = true,
                             onClick = { onAction(KeyAction.Enter) },

@@ -56,6 +56,13 @@ type Korean jamo, see hiragana committed.  No kanji conversion yet.
       (or load `mapping/syllables.yaml` at build time)
 - [ ] On every committed Korean syllable, look up the kana and
       `InputConnection.commitText` it
+- [ ] **Backspace long-press repeat** — hold-to-delete with acceleration
+      (e.g., first delete after ~400 ms, then ramp from 80 ms / char down
+      to ~30 ms / char).  Touches Backspace key in both BeolsikLayout +
+      CheonjiinLayout; goes through the same
+      `KorJpnImeService.handleBackspace` path so composer state stays
+      consistent (peels jamo while preedit non-empty, falls through to
+      `deleteSurroundingText` once empty)
 - [x] Sideload + smoke-test in any text field (두벌식 D2-verified
       2026-04-27 on Note20 Ultra; 천지인 still untested in service —
       mode toggle waits for Settings DataStore)

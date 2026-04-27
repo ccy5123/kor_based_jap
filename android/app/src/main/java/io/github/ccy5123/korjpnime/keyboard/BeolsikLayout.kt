@@ -120,10 +120,11 @@ fun BeolsikLayout(
                 Key(tokens, shape, label = displayed,
                     onClick = { dispatch(KeyAction.Commit(displayed)) })
             }
-            Key(tokens, shape, weight = 1.4f, fn = true,
-                onClick = { dispatch(KeyAction.Backspace) }) {
-                BackspaceIcon(color = tokens.inkSoft)
-            }
+            BackspaceKey(
+                tokens = tokens,
+                shape = shape,
+                onTriggerBackspace = { dispatch(KeyAction.Backspace) },
+            )
         }
         Row(
             modifier = Modifier.fillMaxWidth().weight(1f),

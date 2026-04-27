@@ -30,6 +30,7 @@ fun KeyboardSurface(
     mode: KeyboardMode,
     modifier: Modifier = Modifier,
     onAction: (KeyAction) -> Unit = {},
+    onSettingsClick: (() -> Unit)? = null,
 ) {
     val tokens = tokens(direction.palette, dark)
     Column(
@@ -38,7 +39,7 @@ fun KeyboardSurface(
             .height(312.dp)
             .background(tokens.sheet),
     ) {
-        TopChrome(tokens = tokens)
+        TopChrome(tokens = tokens, onSettingsClick = onSettingsClick)
         CandidateStrip(tokens = tokens, treatment = direction.strip)
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             when (mode) {

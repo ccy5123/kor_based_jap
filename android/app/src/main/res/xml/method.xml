@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <input-method xmlns:android="http://schemas.android.com/apk/res/android"
-    android:settingsActivity="io.github.ccy5123.korjpnime.MainActivity">
+    android:settingsActivity="io.github.ccy5123.korjpnime.ui.SettingsActivity">
     <subtype
         android:label="@string/ime_label"
         android:imeSubtypeLocale="ko"
