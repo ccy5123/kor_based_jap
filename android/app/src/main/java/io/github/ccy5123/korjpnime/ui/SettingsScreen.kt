@@ -20,13 +20,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -69,6 +74,8 @@ fun SettingsScreen(onClose: () -> Unit) {
         .collectAsState(initial = ThemeMode.AUTO)
     val haptics by KeyboardPreferences.hapticsFlow(context)
         .collectAsState(initial = true)
+    val heightDp by KeyboardPreferences.heightFlow(context)
+        .collectAsState(initial = KeyboardPreferences.DEFAULT_HEIGHT_DP)
 
     Column(
         modifier = Modifier
@@ -119,6 +126,15 @@ fun SettingsScreen(onClose: () -> Unit) {
             onChange = { newMode ->
                 scope.launch { KeyboardPreferences.setThemeMode(context, newMode) }
             },
+        )
+
+        Spacer(Modifier.height(28.dp))
+        SectionLabel("키보드 크기")
+        Spacer(Modifier.height(10.dp))
+
+        HeightSlider(
+            heightDp = heightDp,
+            onChange = { dp -> scope.launch { KeyboardPreferences.setHeight(context, dp) } },
         )
 
         Spacer(Modifier.height(28.dp))
@@ -329,6 +345,71 @@ private fun ModeCard(
                 fontSize = 12.sp,
                 color = Color(0xFF9A9A9A),
             )
+        }
+    }
+}
+
+/**
+ * Keyboard height slider.  Drives a local float state so the thumb tracks the
+ * finger smoothly, then writes the rounded int to DataStore on each value
+ * change — DataStore coalesces rapid writes so this is fine.  Range pulled
+ * from [KeyboardPreferences] so MIN / MAX / DEFAULT live in one place.
+ */
+@Composable
+private fun HeightSlider(
+    heightDp: Int,
+    onChange: (Int) -> Unit,
+) {
+    var localValue by remember(heightDp) { mutableFloatStateOf(heightDp.toFloat()) }
+    val min = KeyboardPreferences.MIN_HEIGHT_DP
+    val max = KeyboardPreferences.MAX_HEIGHT_DP
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFFFAFAFA))
+            .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(12.dp))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = "높이", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "키보드를 사용하기 편한 높이로 조절합니다",
+                    fontSize = 13.sp,
+                    color = Color(0xFF6B6B6B),
+                )
+            }
+            Text(
+                text = "${localValue.toInt()} dp",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFF333333),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Slider(
+            value = localValue,
+            onValueChange = {
+                localValue = it
+                onChange(it.toInt())
+            },
+            valueRange = min.toFloat()..max.toFloat(),
+            steps = (max - min) / 20 - 1, // ~20 dp granularity
+            colors = SliderDefaults.colors(),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(text = "$min dp", fontSize = 11.sp, color = Color(0xFF9A9A9A))
+            Text(text = "$max dp", fontSize = 11.sp, color = Color(0xFF9A9A9A))
         }
     }
 }

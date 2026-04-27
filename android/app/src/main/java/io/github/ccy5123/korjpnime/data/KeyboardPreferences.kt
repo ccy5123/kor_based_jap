@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import io.github.ccy5123.korjpnime.theme.KeyboardMode
@@ -31,9 +32,21 @@ object KeyboardPreferences {
     private val HAPTICS_KEY = booleanPreferencesKey("haptics_enabled")
     private val DIRECTION_KEY = stringPreferencesKey("theme_direction")
     private val THEME_MODE_KEY = stringPreferencesKey("theme_mode")
+    private val HEIGHT_KEY = intPreferencesKey("keyboard_height_dp")
 
     /** Default theme direction id — d1 Stratus (cool blue, rounded, chip strip). */
     const val DEFAULT_DIRECTION_ID = "d1"
+
+    /**
+     * Default keyboard surface height in dp.  360 dp is the comfortable
+     * middle ground for the 5-row Beolsik layout (~70 dp/row including
+     * gaps) while still leaving display area for the editor on shorter
+     * phones; user can resize via [HEIGHT_KEY].
+     */
+    const val DEFAULT_HEIGHT_DP = 360
+    /** User-adjustable bounds for the keyboard height slider. */
+    const val MIN_HEIGHT_DP = 240
+    const val MAX_HEIGHT_DP = 480
 
     /** Stream of the current keyboard layout mode.  Defaults to 두벌식. */
     fun modeFlow(context: Context): Flow<KeyboardMode> =
@@ -78,5 +91,18 @@ object KeyboardPreferences {
 
     suspend fun setThemeMode(context: Context, mode: ThemeMode) {
         context.dataStore.edit { it[THEME_MODE_KEY] = mode.name }
+    }
+
+    /** Stream of the user's selected keyboard height in dp. */
+    fun heightFlow(context: Context): Flow<Int> =
+        context.dataStore.data.map { prefs ->
+            (prefs[HEIGHT_KEY] ?: DEFAULT_HEIGHT_DP)
+                .coerceIn(MIN_HEIGHT_DP, MAX_HEIGHT_DP)
+        }
+
+    suspend fun setHeight(context: Context, dp: Int) {
+        context.dataStore.edit {
+            it[HEIGHT_KEY] = dp.coerceIn(MIN_HEIGHT_DP, MAX_HEIGHT_DP)
+        }
     }
 }

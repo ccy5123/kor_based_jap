@@ -165,6 +165,8 @@ class KorJpnImeService :
                 .collectAsState(initial = ThemeMode.AUTO)
             val haptics by KeyboardPreferences.hapticsFlow(applicationContext)
                 .collectAsState(initial = true)
+            val heightDp by KeyboardPreferences.heightFlow(applicationContext)
+                .collectAsState(initial = KeyboardPreferences.DEFAULT_HEIGHT_DP)
             val candidateList by candidates.collectAsState()
 
             val direction = DIRECTIONS.firstOrNull { it.id == directionId } ?: DIRECTIONS.first()
@@ -181,6 +183,7 @@ class KorJpnImeService :
                         direction = direction,
                         dark = dark,
                         mode = mode,
+                        heightDp = heightDp,
                         candidates = candidateList,
                         onCandidatePick = ::handleCandidatePick,
                         onAction = ::handleAction,

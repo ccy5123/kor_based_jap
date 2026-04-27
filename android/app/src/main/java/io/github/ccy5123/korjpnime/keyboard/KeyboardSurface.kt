@@ -20,8 +20,8 @@ import io.github.ccy5123.korjpnime.theme.tokens
 
 /**
  * Full keyboard: top chrome + candidate strip + key grid for the selected mode.
- * Sized to the design's 312 dp keyboard height by default; pass [Modifier.height]
- * to override.
+ * Height is controlled by [heightDp] (default 360 dp); user-adjustable via the
+ * Settings slider, persisted in [io.github.ccy5123.korjpnime.data.KeyboardPreferences].
  */
 // @MX:ANCHOR: [AUTO] Single rendering entry point for the IME — invariant across
 // MainActivity preview, KorJpnImeService.onCreateInputView (D2), and the @Preview matrix.
@@ -34,6 +34,7 @@ fun KeyboardSurface(
     dark: Boolean,
     mode: KeyboardMode,
     modifier: Modifier = Modifier,
+    heightDp: Int = 360,
     candidates: List<String> = emptyList(),
     onCandidatePick: (String) -> Unit = {},
     onAction: (KeyAction) -> Unit = {},
@@ -47,7 +48,7 @@ fun KeyboardSurface(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .height(312.dp)
+            .height(heightDp.dp)
             .background(tokens.sheet),
     ) {
         TopChrome(tokens = tokens, onSettingsClick = onSettingsClick)
