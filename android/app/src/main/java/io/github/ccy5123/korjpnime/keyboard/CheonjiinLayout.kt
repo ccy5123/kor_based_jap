@@ -69,7 +69,20 @@ private val DIGIT_BY_PRIMARY: Map<Char, String> = mapOf(
     'ㅇ' to "0",
 )
 
-private val LETTERS_GRID: List<List<CjCell>> = listOf(
+/**
+ * Letters-page punctuation cycle (row 3 col 4) — language-aware.
+ *  - JAPANESE: 句点 → 読点 → 全角？ → 全角！  (standard JP 4-cycle).
+ *  - KOREAN / ENGLISH: ASCII counterparts so Korean Cheonjiin doesn't
+ *    silently emit Japanese full-width punct when the user's mode is
+ *    Korean output.
+ */
+private fun lettersPunctCycleFor(lang: InputLanguage): List<Char> =
+    if (lang == InputLanguage.JAPANESE)
+        listOf('。', '、', '？', '！')
+    else
+        listOf('.', ',', '?', '!')
+
+private fun lettersGridFor(lang: InputLanguage): List<List<CjCell>> = listOf(
     listOf(
         CjCell.Vowel(CheonjiinComposer.STROKE_I),
         CjCell.Vowel(CheonjiinComposer.STROKE_DOT),
@@ -86,8 +99,7 @@ private val LETTERS_GRID: List<List<CjCell>> = listOf(
         CjCell.ConsonantGroup(CYCLES.getValue('ㅂ')),
         CjCell.ConsonantGroup(CYCLES.getValue('ㅅ')),
         CjCell.ConsonantGroup(CYCLES.getValue('ㅈ')),
-        // 句点 → 読点 → 全角？ → 全角！ — standard Japanese 4-cycle.
-        CjCell.Punct(listOf('。', '、', '？', '！')),
+        CjCell.Punct(lettersPunctCycleFor(lang)),
     ),
     listOf(
         CjCell.SymbolLangSplit,
@@ -253,7 +265,7 @@ private fun CjLetters(
             .padding(pad.dp),
         verticalArrangement = Arrangement.spacedBy(gap.dp),
     ) {
-        LETTERS_GRID.forEach { row ->
+        lettersGridFor(inputLanguage).forEach { row ->
             CjRow(gap = gap) {
                 row.forEach { cell ->
                     when (cell) {

@@ -304,10 +304,20 @@ class KorJpnImeService :
      * the dedicated cycle button on the letters page (replaces the prior 2-
      * state 한/영 toggle).  The UI re-renders via the inputLanguageFlow
      * collectAsState; symbol page content + space-bar label switch in lockstep.
+     *
+     * Flushes any in-progress composer syllable in the CURRENT language
+     * first — otherwise switching mid-syllable would commit the half-built
+     * jamo as the new language's output (e.g. "ㄱㅏ" pending in JP, switch
+     * to KOR, would surface "가" as Korean instead of "か" the user
+     * intended).  Plus we drop the kana run so KOR→JP doesn't carry stale
+     * candidate context from the previous mode.
      */
     private fun cycleInputLanguage() {
-        val current = inputLanguage
-        val next = when (current) {
+        val ic = currentInputConnection
+        if (ic != null) batched(ic) { flushComposerInner(ic) }
+        currentKanaRun = ""
+        refreshCandidates()
+        val next = when (inputLanguage) {
             InputLanguage.KOREAN -> InputLanguage.ENGLISH
             InputLanguage.ENGLISH -> InputLanguage.JAPANESE
             InputLanguage.JAPANESE -> InputLanguage.KOREAN
@@ -533,8 +543,7 @@ class KorJpnImeService :
                     CheonjiinComposer.Op.Undo -> composer.undoLastJamo()
                     is CheonjiinComposer.Op.Emit -> composer.input(op.jamo).also { finalized ->
                         if (finalized.isNotEmpty()) {
-                            val kana = convertHangulToKana(finalized, composer.currentChoJamo())
-                            emit(ic, kana)
+                            emit(ic, convertForOutput(finalized, composer.currentChoJamo()))
                         }
                     }
                 }
@@ -596,12 +605,12 @@ class KorJpnImeService :
             if (text.length == 1 && HangulComposer.isHangulJamo(text[0])) {
                 val finalized = composer.input(text[0])
                 if (finalized.isNotEmpty()) {
-                    val kana = convertHangulToKana(finalized, composer.currentChoJamo())
-                    emit(ic, kana)
+                    emit(ic, convertForOutput(finalized, composer.currentChoJamo()))
                 }
                 // Preedit shows the in-progress Hangul syllable so the user
-                // sees what they're typing; the kana commit happens once the
-                // syllable closes (above branch).
+                // sees what they're typing; the conversion-to-kana (or
+                // hangul-as-is in Korean mode) happens once the syllable
+                // closes — above branch.
                 ic.setComposingText(composer.preedit(), 1)
             } else {
                 // Punctuation, digits, kana, anything non-jamo — flush
@@ -611,6 +620,23 @@ class KorJpnImeService :
             }
         }
     }
+
+    /**
+     * Convert a finalized Hangul string to the per-mode editor output:
+     *  - JAPANESE: full kana conversion via [convertHangulToKana].
+     *  - KOREAN / ENGLISH: pass the Hangul through unchanged so 두벌식 +
+     *    KOREAN mode types regular Hangul (the project's secondary use case).
+     *
+     * ENGLISH mode shouldn't reach this path in practice — the QWERTY
+     * letters page commits ASCII via the non-jamo branch — but the
+     * fall-through is harmless.
+     */
+    private fun convertForOutput(finalized: String, fallbackNext: Char): String =
+        if (inputLanguage == InputLanguage.JAPANESE) {
+            convertHangulToKana(finalized, fallbackNext)
+        } else {
+            finalized
+        }
 
     /**
      * Convert ASCII digits to full-width Japanese counterparts (０..９,
@@ -682,8 +708,7 @@ class KorJpnImeService :
         if (composer.empty()) return
         val flushed = composer.flush()
         if (flushed.isNotEmpty()) {
-            val kana = convertHangulToKana(flushed, ' ')
-            emit(ic, kana)
+            emit(ic, convertForOutput(flushed, ' '))
         }
     }
 

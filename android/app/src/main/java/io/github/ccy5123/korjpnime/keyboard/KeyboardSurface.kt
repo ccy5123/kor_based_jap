@@ -65,12 +65,20 @@ fun KeyboardSurface(
             } else null,
         )
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-            when (mode) {
-                KeyboardMode.BEOLSIK -> BeolsikLayout(
+            // ENGLISH mode always renders QWERTY regardless of the user's
+            // 두벌식 / 천지인 keyboardMode preference — Cheonjiin's 4×4 grid
+            // can't host a sensible English layout without T9-style multi-tap,
+            // and QWERTY is the universal expectation for ASCII input.
+            when {
+                inputLanguage == InputLanguage.ENGLISH -> QwertyLayout(
                     tokens = tokens, shape = direction.shape, onAction = onAction,
                     inputLanguage = inputLanguage, onLanguageCycle = onLanguageCycle,
                 )
-                KeyboardMode.CHEONJIIN -> CheonjiinLayout(
+                mode == KeyboardMode.BEOLSIK -> BeolsikLayout(
+                    tokens = tokens, shape = direction.shape, onAction = onAction,
+                    inputLanguage = inputLanguage, onLanguageCycle = onLanguageCycle,
+                )
+                else -> CheonjiinLayout(
                     tokens = tokens, shape = direction.shape, onAction = onAction,
                     inputLanguage = inputLanguage, onLanguageCycle = onLanguageCycle,
                 )

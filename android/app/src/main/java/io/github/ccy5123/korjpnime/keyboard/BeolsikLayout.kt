@@ -74,12 +74,34 @@ private val JPN_SYM_PAGE_2: List<List<String>> = listOf(
     listOf("☆", "▪︎", "¤", "《", "》", "¡", "¿"),
 )
 
-/** Returns `[page1, page2]` for the current language. */
-private fun symbolPagesFor(lang: InputLanguage): List<List<List<String>>> =
-    if (lang == InputLanguage.JAPANESE)
-        listOf(JPN_SYM_PAGE_1, JPN_SYM_PAGE_2)
-    else
-        listOf(KOR_SYM_PAGE_1, KOR_SYM_PAGE_2)
+// English uses ASCII like Korean but swaps the prominent currency: $ on
+// the easy-reach P1 row 2 (same slot Korean uses for ₩), and ¥ + ₩ tucked
+// at the end of P2 row 1 (where Korean has ¥ + $).  Decorative pages
+// mirror Korean / Japanese exactly.
+private val ENG_SYM_PAGE_1: List<List<String>> = listOf(
+    listOf("+", "×", "÷", "=", "/", "_", "<", ">", "[", "]"),
+    listOf("!", "@", "#", "$", "%", "^", "&", "*", "(", ")"),
+    listOf("-", "'", "\"", ":", ";", ",", "?"),
+)
+
+private val ENG_SYM_PAGE_2: List<List<String>> = listOf(
+    listOf("`", "~", "\\", "|", "{", "}", "€", "£", "¥", "₩"),
+    listOf("°", "•", "○", "●", "□", "■", "♤", "♡", "◇", "♧"),
+    listOf("☆", "▪︎", "¤", "《", "》", "¡", "¿"),
+)
+
+/**
+ * Returns `[page1, page2]` for the current language.  Internal so
+ * [QwertyLayout] can reuse the same routing in ENGLISH mode.  Three
+ * disjoint sets so each language's primary currency sits on the easy-
+ * reach slot (₩ for KOR, $ for ENG, ¥ for JPN).
+ */
+internal fun beolsikSymbolPagesFor(lang: InputLanguage): List<List<List<String>>> =
+    when (lang) {
+        InputLanguage.JAPANESE -> listOf(JPN_SYM_PAGE_1, JPN_SYM_PAGE_2)
+        InputLanguage.ENGLISH -> listOf(ENG_SYM_PAGE_1, ENG_SYM_PAGE_2)
+        InputLanguage.KOREAN -> listOf(KOR_SYM_PAGE_1, KOR_SYM_PAGE_2)
+    }
 
 private enum class BeolsikPage { LETTERS, SYMBOLS_1, SYMBOLS_2 }
 
@@ -108,7 +130,7 @@ fun BeolsikLayout(
     onLanguageCycle: () -> Unit = {},
 ) {
     var page by remember { mutableStateOf(BeolsikPage.LETTERS) }
-    val pages = symbolPagesFor(inputLanguage)
+    val pages = beolsikSymbolPagesFor(inputLanguage)
 
     when (page) {
         BeolsikPage.LETTERS -> BeolsikLetters(
