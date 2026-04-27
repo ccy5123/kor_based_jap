@@ -76,13 +76,44 @@ class KorJpnImeService :
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
-        // Editor lost focus / IME hidden — commit any pending syllable into
-        // the now-fading field, then drop composer state so the next field
-        // starts clean.  Without this the next field would carry a stale
-        // (cho, jung, jong) trio.
-        currentInputConnection?.let { flushComposer(it) }
+        // Keyboard hidden / input session ending. Just drop composer state —
+        // the framework auto-finalizes the editor's composing region into
+        // committed text when the connection ends, so we don't need to (and
+        // shouldn't) call commitText ourselves.  Earlier we did, which leaked
+        // the trailing preedit ("요") into the next field after KakaoTalk's
+        // external clear-on-send.
         composer.reset()
         super.onFinishInputView(finishingInput)
+    }
+
+    override fun onFinishInput() {
+        // True end of input session (target field is gone).  Belt-and-suspenders
+        // reset for cases where onFinishInputView didn't fire.
+        composer.reset()
+        super.onFinishInput()
+    }
+
+    override fun onUpdateSelection(
+        oldSelStart: Int,
+        oldSelEnd: Int,
+        newSelStart: Int,
+        newSelEnd: Int,
+        candidatesStart: Int,
+        candidatesEnd: Int,
+    ) {
+        super.onUpdateSelection(
+            oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd,
+        )
+        // If we still hold composer state but the editor reports no active
+        // composing region (candidatesStart == -1), the field was reset
+        // externally — KakaoTalk clears the EditText after its own send button
+        // fires, the user tapped a different EditText, the app called
+        // setText(""), etc.  Drop our state so the next jamo doesn't hand off
+        // its leftover (cho, jung, jong) into a fresh context (the bug that
+        // produced "요감사합니다").
+        if (!composer.empty() && candidatesStart < 0) {
+            composer.reset()
+        }
     }
 
     override fun onDestroy() {
@@ -93,45 +124,95 @@ class KorJpnImeService :
 
     private fun handleAction(action: KeyAction) {
         val ic = currentInputConnection ?: return
+        // Catch external field changes that bypass onUpdateSelection (KakaoTalk's
+        // send button clears the field but doesn't notify our IME, so the leak
+        // detector below misses it).  Sync IPC, runs only when composer is
+        // non-empty and only at the start of an action.
+        resyncComposerIfStale(ic)
         when (action) {
             is KeyAction.Commit -> handleCommit(ic, action.text)
-            KeyAction.Space -> { flushComposer(ic); ic.commitText(" ", 1) }
+            KeyAction.Space -> batched(ic) { flushComposerInner(ic); ic.commitText(" ", 1) }
             KeyAction.Backspace -> handleBackspace(ic)
-            KeyAction.Enter -> { flushComposer(ic); handleEnter() }
-            KeyAction.SwitchIme -> { flushComposer(ic); switchIme() }
-            KeyAction.Shift -> Unit       // 쌍자음 lands with Shift state machine (M1 closeout)
+            KeyAction.Enter -> { batched(ic) { flushComposerInner(ic) }; handleEnter() }
+            KeyAction.SwitchIme -> { batched(ic) { flushComposerInner(ic) }; switchIme() }
+            KeyAction.Shift -> Unit       // BeolsikLayout owns the Shift state; service receives the action only for haptic
             KeyAction.Symbols -> Unit     // future milestone
         }
     }
 
+    /**
+     * Wrap an IC operation in [InputConnection.beginBatchEdit] /
+     * [InputConnection.endBatchEdit].  The framework holds back its
+     * `onUpdateSelection` callback until the batch ends, so the caller
+     * sees ONE consolidated post-batch state instead of every intermediate
+     * step (notably the brief no-composing-region window between
+     * `commitText` and `setComposingText`, which would otherwise trip the
+     * external-clear detector in [onUpdateSelection]).
+     */
+    private inline fun batched(ic: InputConnection, block: () -> Unit) {
+        ic.beginBatchEdit()
+        try {
+            block()
+        } finally {
+            ic.endBatchEdit()
+        }
+    }
+
     private fun handleCommit(ic: InputConnection, text: String) {
-        if (text.length == 1 && HangulComposer.isHangulJamo(text[0])) {
-            val finalized = composer.input(text[0])
-            if (finalized.isNotEmpty()) ic.commitText(finalized, 1)
-            ic.setComposingText(composer.preedit(), 1)
-        } else {
-            // Punctuation, digits, kana, anything non-jamo — flush in-progress
-            // syllable first so it commits BEFORE the new text.
-            flushComposer(ic)
-            ic.commitText(text, 1)
+        batched(ic) {
+            if (text.length == 1 && HangulComposer.isHangulJamo(text[0])) {
+                val finalized = composer.input(text[0])
+                if (finalized.isNotEmpty()) ic.commitText(finalized, 1)
+                ic.setComposingText(composer.preedit(), 1)
+            } else {
+                // Punctuation, digits, kana, anything non-jamo — flush
+                // in-progress syllable first so it commits BEFORE the new text.
+                flushComposerInner(ic)
+                ic.commitText(text, 1)
+            }
         }
     }
 
     private fun handleBackspace(ic: InputConnection) {
-        if (!composer.empty()) {
-            composer.undoLastJamo()
-            // Empty preedit clears the composing region; non-empty replaces it.
-            ic.setComposingText(composer.preedit(), 1)
-        } else {
-            ic.deleteSurroundingText(1, 0)
+        batched(ic) {
+            if (!composer.empty()) {
+                composer.undoLastJamo()
+                // Empty preedit clears the composing region; non-empty replaces it.
+                ic.setComposingText(composer.preedit(), 1)
+            } else {
+                ic.deleteSurroundingText(1, 0)
+            }
         }
     }
 
-    /** Commit any in-progress syllable and clear the composing region. */
-    private fun flushComposer(ic: InputConnection) {
+    /**
+     * Commit any in-progress syllable.  Wrap with [batched] yourself when
+     * combining with other IC operations in the same handleAction branch.
+     */
+    private fun flushComposerInner(ic: InputConnection) {
         if (composer.empty()) return
         val flushed = composer.flush()
         if (flushed.isNotEmpty()) ic.commitText(flushed, 1)
+    }
+
+    /**
+     * Source-of-truth check: verify the editor's text-before-cursor still ends
+     * with our composer's preedit.  If not, the field was changed externally
+     * (KakaoTalk's send-then-clear, an autofill insertion, the user tapped a
+     * different EditText that didn't trigger onStartInput, etc.) and our
+     * composer state is stale.
+     *
+     * Cheaper to fix on next keystroke than to chase every async callback that
+     * apps may or may not send: KakaoTalk's clear doesn't fire onUpdateSelection
+     * on this device, so the [onUpdateSelection] override below isn't enough on
+     * its own.
+     */
+    private fun resyncComposerIfStale(ic: InputConnection) {
+        if (composer.empty()) return
+        val expected = composer.preedit()
+        if (expected.isEmpty()) return
+        val actual = ic.getTextBeforeCursor(expected.length, 0)?.toString() ?: return
+        if (actual != expected) composer.reset()
     }
 
     private fun handleEnter() {
