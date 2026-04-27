@@ -21,6 +21,7 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import io.github.ccy5123.korjpnime.data.KeyboardPreferences
+import io.github.ccy5123.korjpnime.engine.BatchimLookup
 import io.github.ccy5123.korjpnime.engine.CheonjiinComposer
 import io.github.ccy5123.korjpnime.engine.HangulComposer
 import io.github.ccy5123.korjpnime.keyboard.KeyAction
@@ -184,7 +185,7 @@ class KorJpnImeService :
         when (action) {
             is KeyAction.Commit -> handleCommit(ic, action.text)
             is KeyAction.CjConsonant -> handleCjOps(ic, cheonjiin.tapConsonant(action.cycle, System.currentTimeMillis()))
-            is KeyAction.CjVowel -> handleCjOps(ic, cheonjiin.tapVowel(action.stroke, System.currentTimeMillis()))
+            is KeyAction.CjVowel -> handleCjVowel(ic, action.stroke)
             is KeyAction.CjPunct -> handleCjPunct(ic, action.cycle)
             KeyAction.Space -> handleSpace(ic)
             KeyAction.Backspace -> handleBackspace(ic)
@@ -244,6 +245,46 @@ class KorJpnImeService :
     }
 
     /**
+     * Cheonjiin vowel-stroke handler with a particle-marker shortcut.
+     *
+     * The 12-key keypad has no direct ㅏ / ㅔ / ㅗ keys, so the second-vowel
+     * trigger that fires kWoMarker / kWaMarker / kEMarker on Beolsik (오+ㅗ,
+     * 와+ㅏ, 에+ㅔ) is unreachable.  We re-bind it to a single ㆍ tap on top
+     * of the matching syllable: 오/와/에 already in the composer (silent ㅇ
+     * + ㅗ/ㅘ/ㅔ jung), tap ㆍ → feed the matching trigger jamo to
+     * HangulComposer, which emits the marker via its existing CHO_JUNG
+     * branch.  The Cheonjiin state machine is bypassed for this case.
+     */
+    private fun handleCjVowel(ic: InputConnection, stroke: Char) {
+        if (stroke == CheonjiinComposer.STROKE_DOT) {
+            val triggerJamo = particleMarkerTrigger()
+            if (triggerJamo != null) {
+                cheonjiin.reset()
+                handleCjOps(ic, listOf(CheonjiinComposer.Op.Emit(triggerJamo)))
+                return
+            }
+        }
+        handleCjOps(ic, cheonjiin.tapVowel(stroke, System.currentTimeMillis()))
+    }
+
+    /**
+     * Returns the jamo to feed [HangulComposer.input] so that
+     * its existing particle-marker branch fires for the current state, or
+     * null when the composer isn't sitting on one of the trigger syllables.
+     * Marker patterns require silent-ㅇ cho + a specific compound/single
+     * vowel; the composer recognises them via `cho==11 && rawJung==jamo`.
+     */
+    private fun particleMarkerTrigger(): Char? {
+        if (composer.currentChoJamo() != 'ㅇ') return null
+        return when (composer.currentRawJung()) {
+            'ㅗ' -> 'ㅗ'  // 오 + ㆍ → kWoMarker → を
+            'ㅘ' -> 'ㅏ'  // 와 + ㆍ → kWaMarker → は
+            'ㅔ' -> 'ㅔ'  // 에 + ㆍ → kEMarker → へ
+            else -> null
+        }
+    }
+
+    /**
      * Apply a sequence of CheonjiinComposer ops (Undo / Emit) to the
      * underlying HangulComposer + editor.  Wrapped in a single batchEdit so
      * intermediate composing-region states aren't reported via onUpdateSelection
@@ -256,7 +297,10 @@ class KorJpnImeService :
                 when (op) {
                     CheonjiinComposer.Op.Undo -> composer.undoLastJamo()
                     is CheonjiinComposer.Op.Emit -> composer.input(op.jamo).also { finalized ->
-                        if (finalized.isNotEmpty()) ic.commitText(finalized, 1)
+                        if (finalized.isNotEmpty()) {
+                            val kana = convertHangulToKana(finalized, composer.currentChoJamo())
+                            ic.commitText(kana, 1)
+                        }
                     }
                 }
             }
@@ -317,7 +361,13 @@ class KorJpnImeService :
         batched(ic) {
             if (text.length == 1 && HangulComposer.isHangulJamo(text[0])) {
                 val finalized = composer.input(text[0])
-                if (finalized.isNotEmpty()) ic.commitText(finalized, 1)
+                if (finalized.isNotEmpty()) {
+                    val kana = convertHangulToKana(finalized, composer.currentChoJamo())
+                    ic.commitText(kana, 1)
+                }
+                // Preedit shows the in-progress Hangul syllable so the user
+                // sees what they're typing; the kana commit happens once the
+                // syllable closes (above branch).
                 ic.setComposingText(composer.preedit(), 1)
             } else {
                 // Punctuation, digits, kana, anything non-jamo — flush
@@ -326,6 +376,26 @@ class KorJpnImeService :
                 ic.commitText(text, 1)
             }
         }
+    }
+
+    /**
+     * Convert a finalized Hangul string (one or more syllables emitted by
+     * [HangulComposer.input] or [HangulComposer.flush]) into the kana to
+     * commit.  Each char's `nextJamo` lookahead is the next char's leading
+     * cho, falling back to [fallbackNext] for the last char (typically the
+     * composer's new cho after migration, or NUL at flush boundaries).
+     */
+    private fun convertHangulToKana(finalized: String, fallbackNext: Char): String {
+        val sb = StringBuilder()
+        for (i in finalized.indices) {
+            val nextJamo = if (i + 1 < finalized.length) {
+                BatchimLookup.firstCho(finalized[i + 1])
+            } else {
+                fallbackNext
+            }
+            sb.append(BatchimLookup.lookup(finalized[i], nextJamo))
+        }
+        return sb.toString()
     }
 
     private fun handleBackspace(ic: InputConnection) {
@@ -343,11 +413,16 @@ class KorJpnImeService :
     /**
      * Commit any in-progress syllable.  Wrap with [batched] yourself when
      * combining with other IC operations in the same handleAction branch.
+     * Terminal flush — no following jamo, so [BatchimLookup.suffix] sees
+     * NUL nextJamo (sokuon_terminal branch fires for ㅅ/ㅆ jong).
      */
     private fun flushComposerInner(ic: InputConnection) {
         if (composer.empty()) return
         val flushed = composer.flush()
-        if (flushed.isNotEmpty()) ic.commitText(flushed, 1)
+        if (flushed.isNotEmpty()) {
+            val kana = convertHangulToKana(flushed, ' ')
+            ic.commitText(kana, 1)
+        }
     }
 
     private fun handleEnter() {

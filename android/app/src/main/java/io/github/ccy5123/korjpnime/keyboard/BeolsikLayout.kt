@@ -137,12 +137,12 @@ fun BeolsikLayout(
                 onClick = { dispatch(KeyAction.SwitchIme) }) {
                 GlobeIcon(color = tokens.inkSoft)
             }
-            Key(tokens, shape, weight = 0.7f, fn = true, label = ",",
-                onClick = { dispatch(KeyAction.Commit(",")) })
+            Key(tokens, shape, weight = 0.7f, fn = true, label = "、",
+                onClick = { dispatch(KeyAction.Commit("、")) })
             SpaceKey(tokens = tokens, shape = shape, weight = 3.5f,
                 onClick = { dispatch(KeyAction.Space) })
-            Key(tokens, shape, weight = 0.7f, fn = true, label = ".",
-                onClick = { dispatch(KeyAction.Commit(".")) })
+            Key(tokens, shape, weight = 0.7f, fn = true, label = "。",
+                onClick = { dispatch(KeyAction.Commit("。")) })
             Key(tokens, shape, weight = 1.3f, accent = true,
                 onClick = { dispatch(KeyAction.Enter) }) {
                 EnterIcon(color = tokens.onAccent)

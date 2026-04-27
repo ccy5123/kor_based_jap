@@ -56,7 +56,8 @@ private val GRID: List<List<CjCell>> = listOf(
         CjCell.ConsonantGroup(CYCLES.getValue('ㅂ')),
         CjCell.ConsonantGroup(CYCLES.getValue('ㅅ')),
         CjCell.ConsonantGroup(CYCLES.getValue('ㅈ')),
-        CjCell.Punct(listOf('.', ',', '?', '!')),
+        // 句点 → 読点 → 全角？ → 全角！ — standard Japanese 4-cycle.
+        CjCell.Punct(listOf('。', '、', '？', '！')),
     ),
     listOf(
         CjCell.Plain("!#1"),
