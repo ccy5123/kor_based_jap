@@ -29,6 +29,7 @@ fun KeyboardSurface(
     dark: Boolean,
     mode: KeyboardMode,
     modifier: Modifier = Modifier,
+    onAction: (KeyAction) -> Unit = {},
 ) {
     val tokens = tokens(direction.palette, dark)
     Column(
@@ -41,8 +42,12 @@ fun KeyboardSurface(
         CandidateStrip(tokens = tokens, treatment = direction.strip)
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             when (mode) {
-                KeyboardMode.BEOLSIK -> BeolsikLayout(tokens = tokens, shape = direction.shape)
-                KeyboardMode.CHEONJIIN -> CheonjiinLayout(tokens = tokens, shape = direction.shape)
+                KeyboardMode.BEOLSIK -> BeolsikLayout(
+                    tokens = tokens, shape = direction.shape, onAction = onAction,
+                )
+                KeyboardMode.CHEONJIIN -> CheonjiinLayout(
+                    tokens = tokens, shape = direction.shape, onAction = onAction,
+                )
             }
         }
     }

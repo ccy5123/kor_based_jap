@@ -56,7 +56,83 @@ type Korean jamo, see hiragana committed.  No kanji conversion yet.
       (or load `mapping/syllables.yaml` at build time)
 - [ ] On every committed Korean syllable, look up the kana and
       `InputConnection.commitText` it
-- [ ] Sideload + smoke-test in any text field (verify both modes)
+- [x] Sideload + smoke-test in any text field (두벌식 D2-verified
+      2026-04-27 on Note20 Ultra; 천지인 still untested in service —
+      mode toggle waits for Settings DataStore)
+
+### D2 progress -- "IME runs on the phone, raw jamo out"
+
+Slice of M1 between "keyboard renders in @Preview" and "Hangul
+composer wired up".  Goal: confirm the system actually shows our
+ComposeView when the user picks KorJpnIme as their keyboard, and
+that taps reach the editor.
+
+Landed:
+
+- `keyboard/KeyAction.kt` -- sealed dispatch type
+  (Commit / Backspace / Enter / Space / SwitchIme / Shift / Symbols)
+- `KorJpnImeService.onCreateInputView()` -- hosts a `ComposeView` with
+  Lifecycle / ViewModelStore / SavedStateRegistry owners attached
+  before `setContent` (Compose pulls them off the view tree)
+- `KeyboardSurface` / `BeolsikLayout` / `CheonjiinLayout` / `Key` /
+  `SpaceKey` all take an `onAction: (KeyAction) -> Unit = {}`
+  callback (default no-op so the 14 @Preview entries stay inert)
+- Symbol / shift keys dispatch but the service no-ops them; cycle of
+  multi-tap consonants in Cheonjiin emits *primary* jamo only
+  (state machine is D3)
+- `androidx.savedstate:savedstate-ktx` added to `libs.versions.toml`
+  + `app/build.gradle.kts` (needed for the view-tree extension)
+- Mode + direction hard-coded to **두벌식 + d1 Stratus** in
+  `KorJpnImeService` -- DataStore wiring is later in M1
+
+D2 explicitly defers:
+
+- Hangul composition (raw `ㅎ` `ㅏ` `ㄴ` instead of `한`) -- D3
+- Cheonjiin multi-tap cycling + vowel composition -- D3
+- Press-down haptics / key-down feedback (currently fires on tap-up
+  via `Modifier.clickable`, fine for first verification)
+- Symbols page, shift-locked uppercase
+- Settings screen / mode persistence
+
+Verification on Note20 Ultra (Android 13) -- run after a clean
+`./gradlew assembleDebug` in Android Studio:
+
+- [x] APK installs (`adb install -r app/build/outputs/apk/debug/app-debug.apk`)
+- [x] **Settings → 일반 → 언어 및 입력 → 화면 키보드 → 키보드 관리** lists
+      *KorJpnIme* and the toggle stays on
+- [x] Pull down notification shade → **키보드 선택** chip → KorJpnIme
+- [x] Open a text field -- the d1 Stratus surface paints (after the
+      `KorJpnImeView` fix, see post-mortem below)
+- [x] Tap a jamo key (e.g. ㅎ) -- the literal jamo appears in the
+      editor (not yet composed into a syllable)
+- [x] Backspace deletes one code unit
+- [x] Space inserts a real space
+- [x] Enter inserts newline / performs editor action
+- [x] Globe key cycles to the next system IME and back
+- [x] No crash during 10+ min of use (verified via logcat —
+      `FreecessController` heartbeat steady, no AndroidRuntime errors)
+- [ ] Shift / 쌍자음 -- intentionally deferred to D3 (Shift dispatches
+      `KeyAction.Shift` but the service no-ops it; ㄲ ㄸ ㅃ ㅆ ㅉ wait
+      until the Shift state machine lands)
+
+D2 post-mortem -- the bug we hit on first sideload:
+
+`onCreateInputView()` initially returned a plain `ComposeView` with the
+three view-tree owners set on the ComposeView itself.  This crashed
+immediately with `IllegalStateException: ViewTreeLifecycleOwner not
+found from android.widget.LinearLayout{... android:id/parentPanel}`.
+
+Cause: the IME framework wraps whatever `onCreateInputView()` returns
+inside a system-managed `parentPanel`.  Compose's `WindowRecomposer`
+walks **up** from rootView to find the lifecycle owner -- anything
+attached to the ComposeView itself (which is a *child* of parentPanel)
+is invisible from above.
+
+Fix: introduce `KorJpnImeView` extending `AbstractComposeView`, and in
+`onAttachedToWindow()` set the three owners on `rootView` *before*
+calling `super.onAttachedToWindow()` (which is what kicks off
+composition).  This is the same pattern Florisboard / Tipal / other
+Compose-based IMEs use.
 
 ### M2 -- "Kanji conversion via the simple dict"
 
