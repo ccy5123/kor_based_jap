@@ -23,9 +23,12 @@ import androidx.savedstate.SavedStateRegistryOwner
 import io.github.ccy5123.korjpnime.data.KeyboardPreferences
 import io.github.ccy5123.korjpnime.engine.BatchimLookup
 import io.github.ccy5123.korjpnime.engine.CheonjiinComposer
+import io.github.ccy5123.korjpnime.engine.Connector
 import io.github.ccy5123.korjpnime.engine.Dictionary
 import io.github.ccy5123.korjpnime.engine.HangulComposer
+import io.github.ccy5123.korjpnime.engine.RichDictionary
 import io.github.ccy5123.korjpnime.engine.UserDict
+import io.github.ccy5123.korjpnime.engine.Viterbi
 import io.github.ccy5123.korjpnime.keyboard.KeyAction
 import io.github.ccy5123.korjpnime.keyboard.KeyboardSurface
 import io.github.ccy5123.korjpnime.theme.DIRECTIONS
@@ -85,6 +88,17 @@ class KorJpnImeService :
     private val dictionary = Dictionary()
 
     /**
+     * M3 Viterbi engine — RichDictionary + Connector mmap'd from
+     * `assets/kj_dict.bin` and `assets/kj_conn.bin`.  Once loaded, the
+     * top-K segmented results surface ABOVE the simple-dict candidates.
+     * Falls back silently when the engine isn't ready (still loading or
+     * load failed).
+     */
+    private val richDict = RichDictionary()
+    private val connector = Connector()
+    private val viterbi: Viterbi by lazy { Viterbi(richDict, connector) }
+
+    /**
      * Per-kana user pick history (SharedPreferences-backed).  Lazy because
      * SharedPreferences needs a Context — initialised once [onCreate] runs.
      */
@@ -124,6 +138,15 @@ class KorJpnImeService :
             // Candidates stay empty until this completes.
             dictionary.load(applicationContext)
             refreshCandidates()  // in case kana was already committed pre-load
+        }
+        lifecycleScope.launch {
+            // Viterbi data is bigger (~71 MB across two files) and gets
+            // extracted to internal storage on first run, so first-launch
+            // load is ~1–2 s.  Subsequent launches just mmap the cached
+            // copy and finish in tens of ms.
+            richDict.load(applicationContext)
+            connector.load(applicationContext)
+            refreshCandidates()
         }
     }
 
@@ -183,17 +206,26 @@ class KorJpnImeService :
         val combined = LinkedHashSet<String>()
         // 1. User pick history (most-recent-first).
         combined.addAll(userDict.getUserCandidates(currentKanaRun))
-        // 2. Static dictionary candidates (most-frequent-first), capped to
+        // 2. Viterbi top-K segmented kanji conversions — the M3 engine.
+        //    Surfaces best-cost segmentations like わたしの → 私の that the
+        //    simple dict can't produce because it requires an exact-key
+        //    match.  Skipped when richDict / connector haven't finished
+        //    loading yet; the simple dict below still fires.
+        if (viterbi.isReady) {
+            val topK = viterbi.searchTopK(currentKanaRun, VITERBI_TOP_K)
+            for (r in topK) combined.add(r.joinedSurface())
+        }
+        // 3. Static dictionary candidates (most-frequent-first), capped to
         //    leave room for the katakana + hiragana fallbacks below — even
         //    when a high-frequency kana like あい has many kanji entries.
         if (dictionary.isLoaded) {
             val dictBudget = (MAX_CANDIDATES - 2).coerceAtLeast(0)
             combined.addAll(dictionary.lookup(currentKanaRun).take(dictBudget))
         }
-        // 3. Auto-katakana fallback — guaranteed slot regardless of dict size.
+        // 4. Auto-katakana fallback — guaranteed slot regardless of dict size.
         val katakana = hiraganaToKatakana(currentKanaRun)
         if (katakana != currentKanaRun) combined.add(katakana)
-        // 4. Raw hiragana stay-as-is.
+        // 5. Raw hiragana stay-as-is.
         combined.add(currentKanaRun)
         _candidates.value = combined.toList().take(MAX_CANDIDATES)
     }
@@ -407,6 +439,13 @@ class KorJpnImeService :
      * vowel; the composer recognises them via `cho==11 && rawJung==jamo`.
      */
     private fun particleMarkerTrigger(): Char? {
+        // Markers fire only on an open syllable (cho + jung, no jong).
+        // Without this guard, 엗 + ㆍ — user mid-typing 에도 with ㄷ-jong
+        // captured — would mis-trigger kEMarker because the cho+jung
+        // pair (ㅇ, ㅔ) still matches.  HangulComposer's own Beolsik
+        // marker logic lives in its CHO_JUNG branch, never CHO_JUNG_JONG;
+        // we mirror that constraint here.
+        if (!composer.isOpenChoJung()) return null
         if (composer.currentChoJamo() != 'ㅇ') return null
         return when (composer.currentRawJung()) {
             'ㅗ' -> 'ㅗ'  // 오 + ㆍ → kWoMarker → を
@@ -585,5 +624,14 @@ class KorJpnImeService :
         // Enough to fill several scrolls + room for the expanded panel.
         // Beyond this users want the full grid view (vertical expand).
         private const val MAX_CANDIDATES = 32
+
+        /**
+         * Viterbi top-K depth — small because near-duplicates of the top
+         * pick provide diminishing return in the candidate strip, and
+         * each extra K linearly grows the per-position lattice memory.
+         * Up to [Viterbi.MAX_TOP_K] (10) internally; 5 fits the strip
+         * without crowding out the simple-dict + katakana fallbacks.
+         */
+        private const val VITERBI_TOP_K = 5
     }
 }

@@ -39,11 +39,14 @@ android {
         compose = true
     }
 
-    // jpn_dict.txt is 19 MB plain text — keep it uncompressed in the APK so
-    // the in-process Dictionary loader can read the asset in one shot
-    // without paying the inflate cost on every IME warm-up.
+    // jpn_dict.txt (19 MB) + kj_dict.bin / kj_conn.bin (71 MB combined) all
+    // need to stay uncompressed in the APK: the .txt loader reads the asset
+    // once at warm-up (no inflate hop), and the .bin viterbi reader extracts
+    // them to internal storage and mmaps from there (uncompressed asset means
+    // a single byte-for-byte copy, no inflate buffer).
     androidResources {
         noCompress.add("txt")
+        noCompress.add("bin")
     }
 }
 
