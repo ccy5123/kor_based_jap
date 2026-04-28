@@ -62,7 +62,10 @@ import kotlinx.coroutines.launch
  * for tap targets.
  */
 @Composable
-fun SettingsScreen(onClose: () -> Unit) {
+fun SettingsScreen(
+    onClose: () -> Unit,
+    onOpenLicenses: () -> Unit = {},
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -157,6 +160,16 @@ fun SettingsScreen(onClose: () -> Unit) {
             subtitle = "키 탭마다 짧은 햅틱 피드백",
             checked = haptics,
             onChange = { scope.launch { KeyboardPreferences.setHaptics(context, it) } },
+        )
+
+        Spacer(Modifier.height(28.dp))
+        SectionLabel("정보")
+        Spacer(Modifier.height(10.dp))
+
+        NavRow(
+            title = "오픈소스 라이선스",
+            subtitle = "Mozc / NAIST IPAdic / Okinawa Public-Domain Dictionary",
+            onClick = onOpenLicenses,
         )
 
         Spacer(Modifier.height(32.dp))
@@ -488,6 +501,41 @@ private fun CandidateCountSlider(
             Text(text = "$min 개", fontSize = 11.sp, color = Color(0xFF9A9A9A))
             Text(text = "$max 개", fontSize = 11.sp, color = Color(0xFF9A9A9A))
         }
+    }
+}
+
+/**
+ * Navigation row — same visual weight as ToggleRow but with a chevron
+ * instead of a switch.  Used for the "오픈소스 라이선스" entry that
+ * pushes the LicensesScreen.
+ */
+@Composable
+private fun NavRow(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFFFAFAFA))
+            .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp))
+            Text(text = subtitle, fontSize = 13.sp, color = Color(0xFF6B6B6B))
+        }
+        Text(
+            text = "›",
+            fontSize = 22.sp,
+            color = Color(0xFFB0B0B0),
+        )
     }
 }
 
