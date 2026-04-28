@@ -1,0 +1,22 @@
+title: kor_based_jap
+description: Korean Hangul → Japanese kana IME for Android
+theme: jekyll-theme-cayman
+
+# Without this, Jekyll defaults to Liquid templating which can fail on
+# code samples that contain `{{` / `{%`.  Disabling it for the IME's
+# privacy policy keeps Markdown literal.
+markdown: kramdown
+kramdown:
+  input: GFM
+
+# Be permissive: don't fail the build if a single page can't render.
+plugins: []
+
+exclude:
+  - PLAYSTORE.md          # internal release-process notes, not user-facing
+  - ANDROID_PLAN.md       # internal milestone planning doc
+  - ANDROID_UI_WORKFLOW.md
+  - RELEASE_NOTES_v1.0.0.md
+  - RELEASE_NOTES_v1.0.0.ja.md
+  - RELEASE_NOTES_v1.0.0.ko.md
+  - promo/
