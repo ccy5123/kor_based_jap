@@ -55,7 +55,7 @@ fun KeyboardSurface(
             .height(heightDp.dp)
             .background(tokens.sheet),
     ) {
-        TopChrome(tokens = tokens, onSettingsClick = onSettingsClick)
+        TopChrome(tokens = tokens, inputLanguage = inputLanguage, onSettingsClick = onSettingsClick)
         CandidateStrip(
             tokens = tokens,
             treatment = direction.strip,

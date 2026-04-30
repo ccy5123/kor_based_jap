@@ -214,13 +214,17 @@ fun CheonjiinLayout(
             onBackToLetters = { page = CjPage.LETTERS },
             inputLanguage = inputLanguage,
         )
+        // Symbol pages: page-nav cycles 1/3 → 2/3 → 3/3 → 1/3 (no longer
+        // visits numeric).  Numeric page is reachable via the dedicated
+        // "123" key in the bottom-left split on every symbol page.
         CjPage.SYM_1 -> CjSymbols(
             tokens = tokens,
             shape = shape,
             onAction = onAction,
             rows = symPages[0],
-            cyclePageLabel = "2/3",
+            currentPageLabel = "1/3",
             onCyclePage = { page = CjPage.SYM_2 },
+            onBackToNumeric = { page = CjPage.NUMERIC },
             onBackToLetters = { page = CjPage.LETTERS },
             inputLanguage = inputLanguage,
         )
@@ -229,8 +233,9 @@ fun CheonjiinLayout(
             shape = shape,
             onAction = onAction,
             rows = symPages[1],
-            cyclePageLabel = "3/3",
+            currentPageLabel = "2/3",
             onCyclePage = { page = CjPage.SYM_3 },
+            onBackToNumeric = { page = CjPage.NUMERIC },
             onBackToLetters = { page = CjPage.LETTERS },
             inputLanguage = inputLanguage,
         )
@@ -239,8 +244,9 @@ fun CheonjiinLayout(
             shape = shape,
             onAction = onAction,
             rows = symPages[2],
-            cyclePageLabel = "123",
-            onCyclePage = { page = CjPage.NUMERIC },
+            currentPageLabel = "3/3",
+            onCyclePage = { page = CjPage.SYM_1 },
+            onBackToNumeric = { page = CjPage.NUMERIC },
             onBackToLetters = { page = CjPage.LETTERS },
             inputLanguage = inputLanguage,
         )
@@ -273,6 +279,7 @@ private fun CjLetters(
                             val digit = DIGIT_BY_PRIMARY[cell.stroke]
                             Key(
                                 tokens, shape, label = cell.stroke.toString(),
+                                cornerHint = digit,
                                 onClick = { onAction(KeyAction.CjVowel(cell.stroke)) },
                                 onLongPress = digit?.let { d ->
                                     { onAction(KeyAction.Commit(d)) }
@@ -284,6 +291,7 @@ private fun CjLetters(
                             Key(
                                 tokens, shape,
                                 double = cell.displayPrimary to cell.displaySecondary,
+                                cornerHint = digit,
                                 onClick = { onAction(KeyAction.CjConsonant(cell.cycle)) },
                                 onLongPress = digit?.let { d ->
                                     { onAction(KeyAction.Commit(d)) }
@@ -309,11 +317,13 @@ private fun CjLetters(
                         )
                         CjCell.SymbolLangSplit -> SplitNavKey(
                             tokens = tokens, shape = shape, gap = gap,
-                            // Letters page: left = enter numeric/symbols,
+                            // Letters page: left = enter numeric / symbol mode,
                             // right = language cycle (한 → 영 → 일 → 한).
                             // Long-press on right half opens the system IME
-                            // picker (escape hatch since Globe is gone).
-                            leftLabel = "문자",
+                            // picker (escape hatch since Globe is gone).  Label
+                            // mirrors Beolsik's "!#1" symbol-page key for
+                            // consistency across the two layouts.
+                            leftLabel = "!#1",
                             onLeftClick = onShowNumeric,
                             rightLabel = langCycleLabelFor(inputLanguage),
                             onRightClick = onLanguageCycle,
@@ -406,12 +416,25 @@ private fun CjNumeric(
 
 /**
  * Symbol page — 7 cols × 4 rows.  Top 3 rows: 6 user-spec symbols + the
- * numeric page's utility column (back / enter / punct cycle).  Bottom row:
- * [split nav (weight=2)] [space (weight=4)] [freq symbol (weight=1)].
+ * numeric page's utility column (back / enter / punct cycle).
+ *
+ * Bottom row layout (total weight = 7, aligning the 7-col rows above):
+ *
+ *   [split: 123 | 한] (weight 2)  — fixed left split, NOT page nav:
+ *      • left half "123" → returns to numeric panel;
+ *      • right half "한"  → returns to letters page.
+ *   [split: <currentPageLabel> | space] (weight 4) — page nav lives
+ *      *inside* the space slot per the user's "스페이스바를 반으로 잘라
+ *      서 왼쪽에 할당하고 오른쪽은 원래 스페이스바" spec:
+ *      • left half shows the current page (1/3, 2/3, 3/3) and a tap
+ *        advances the symbol-page cycle (1/3 → 2/3 → 3/3 → 1/3 — does
+ *        NOT visit numeric, which lives on the dedicated "123" key);
+ *      • right half is the actual space bar (committing a literal space).
+ *   [freq symbol] (weight 1)
  *
  * @param rows 3 rows × 6 symbols each (the page's content grid).
- * @param cyclePageLabel Label shown on the split-left half — indicates the
- *   destination page (e.g. "2/3" on SYM_1, "123" on SYM_3).
+ * @param currentPageLabel Indicator of the *current* symbol page ("1/3"
+ *   etc.).  Tapping the split-space's left half advances to the next page.
  */
 @Composable
 private fun CjSymbols(
@@ -419,8 +442,9 @@ private fun CjSymbols(
     shape: KeyShape,
     onAction: (KeyAction) -> Unit,
     rows: List<List<String>>,
-    cyclePageLabel: String,
+    currentPageLabel: String,
     onCyclePage: () -> Unit,
+    onBackToNumeric: () -> Unit,
     onBackToLetters: () -> Unit,
     inputLanguage: InputLanguage,
 ) {
@@ -457,19 +481,30 @@ private fun CjSymbols(
                 onClick = { onAction(KeyAction.CjPunct(NUMERIC_PUNCT_CYCLE)) },
             )
         }
-        // Row 4: split (2 weights) + space (4 weights) + freq symbol (1 weight).
-        // Total = 7 weights, aligning the row to the 7-col rows above.
+        // Row 4: 123/한 (weight 2) + page-nav/space split (weight 4) + freq sym (weight 1).
         CjRow(gap = gap) {
             SplitNavKey(
                 tokens = tokens, shape = shape, gap = gap, weight = 2f,
-                leftLabel = cyclePageLabel,
-                onLeftClick = onCyclePage,
+                leftLabel = "123",
+                onLeftClick = onBackToNumeric,
                 rightLabel = "한",
                 onRightClick = onBackToLetters,
             )
-            SpaceKey(tokens = tokens, shape = shape, weight = 4f,
-                label = spaceLabelFor(inputLanguage),
-                onClick = { onAction(KeyAction.Space) })
+            // Inner Row weighted at 4 splits 50/50 into [page-nav | space].
+            // The page-nav button gets a SpaceKey-style background instead of
+            // a fn-key tint so it visually reads as "part of the space bar"
+            // rather than a separate utility key.
+            Row(
+                modifier = Modifier.weight(4f).fillMaxHeight(),
+                horizontalArrangement = Arrangement.spacedBy(gap.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Key(tokens, shape, fn = true, label = currentPageLabel,
+                    onClick = onCyclePage)
+                SpaceKey(tokens = tokens, shape = shape, weight = 1f,
+                    label = spaceLabelFor(inputLanguage),
+                    onClick = { onAction(KeyAction.Space) })
+            }
             Key(tokens, shape, fn = true, label = FREQ_SYMBOL,
                 onClick = { onAction(KeyAction.Commit(FREQ_SYMBOL)) })
         }
