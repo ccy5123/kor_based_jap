@@ -26,6 +26,18 @@
             android:label="@string/settings_label"
             android:theme="@style/Theme.KorJpnIme" />
 
+        <!-- Bridge activity for voice input — IMEs are services and
+             can't startActivityForResult, so this transparent activity
+             fronts the system speech-recognition dialog and parks the
+             transcript in SharedPreferences for the IME to pick up
+             when the keyboard re-attaches. -->
+        <activity
+            android:name=".voice.VoiceInputActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true" />
+
         <service
             android:name=".KorJpnImeService"
             android:exported="true"

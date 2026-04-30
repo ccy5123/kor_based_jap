@@ -44,6 +44,7 @@ fun KeyboardSurface(
     onAction: (KeyAction) -> Unit = {},
     onSettingsClick: (() -> Unit)? = null,
     onSystemImeSettings: (() -> Unit)? = null,
+    onVoiceInput: (() -> Unit)? = null,
     clipboardItems: List<String> = emptyList(),
     onClipboardPick: (String) -> Unit = {},
     onClipboardDelete: (String) -> Unit = {},
@@ -81,6 +82,7 @@ fun KeyboardSurface(
             onSystemImeSettings = onSystemImeSettings,
             onClipboardClick = { showClipboard = true },
             onEmojiClick = { showEmoji = true },
+            onVoiceClick = onVoiceInput,
         )
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             // ENGLISH mode always renders QWERTY regardless of the user's

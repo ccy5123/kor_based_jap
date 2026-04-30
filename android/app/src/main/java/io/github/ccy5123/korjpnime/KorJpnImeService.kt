@@ -50,6 +50,7 @@ import io.github.ccy5123.korjpnime.theme.InputLanguage
 import io.github.ccy5123.korjpnime.theme.KeyboardMode
 import io.github.ccy5123.korjpnime.theme.ThemeMode
 import io.github.ccy5123.korjpnime.ui.SettingsActivity
+import io.github.ccy5123.korjpnime.voice.VoiceInputActivity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -347,6 +348,7 @@ class KorJpnImeService :
                         onAction = ::handleAction,
                         onSettingsClick = ::openSettings,
                         onSystemImeSettings = ::openSystemImeSettings,
+                        onVoiceInput = ::openVoiceInput,
                         clipboardItems = clipboardList,
                         onClipboardPick = ::handleClipboardPick,
                         onClipboardDelete = { item ->
@@ -736,6 +738,29 @@ class KorJpnImeService :
     }
 
     /**
+     * Launch the voice-input bridge activity from the ⋯ menu.  The
+     * activity fronts the system speech dialog; on success it stashes
+     * the transcript in SharedPreferences and our [onStartInputView]
+     * polls + commits when the keyboard re-attaches.
+     */
+    private fun openVoiceInput() {
+        // BCP-47 tag for the current input mode — without this the
+        // system recognizer falls back to the device locale (e.g.
+        // recognises English on an English-locale phone even when the
+        // user is in Korean mode).
+        val languageTag = when (inputLanguage) {
+            InputLanguage.KOREAN -> "ko-KR"
+            InputLanguage.JAPANESE -> "ja-JP"
+            InputLanguage.ENGLISH -> "en-US"
+        }
+        val intent = Intent(this, VoiceInputActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            putExtra(VoiceInputActivity.EXTRA_LANGUAGE_TAG, languageTag)
+        }
+        startActivity(intent)
+    }
+
+    /**
      * Open Android's system "Languages & input" page so users can switch
      * IMEs / pick a different default keyboard without leaving our IME.
      * Reachable via the ⋯ menu in [TopChrome].
@@ -745,6 +770,21 @@ class KorJpnImeService :
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         startActivity(intent)
+    }
+
+    override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
+        super.onStartInputView(info, restarting)
+        // Voice input bridge: when [VoiceInputActivity] finishes it stashes
+        // the transcript in SharedPreferences.  The IME re-attaches here
+        // once the user is back at the editor — read + clear + commit.
+        val pending = VoiceInputActivity.consumePending(applicationContext)
+        if (pending != null) {
+            val ic = currentInputConnection
+            if (ic != null) {
+                finalizeForCursor(ic)
+                batched(ic) { ic.commitText(pending, 1) }
+            }
+        }
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {

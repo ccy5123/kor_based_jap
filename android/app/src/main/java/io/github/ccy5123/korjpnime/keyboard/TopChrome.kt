@@ -89,6 +89,7 @@ internal fun UtilityMenu(
     onSystemImeSettings: (() -> Unit)?,
     onClipboardClick: (() -> Unit)? = null,
     onEmojiClick: (() -> Unit)? = null,
+    onVoiceClick: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var open by remember { mutableStateOf(false) }
@@ -125,7 +126,7 @@ internal fun UtilityMenu(
             )
             DropdownMenuItem(
                 text = { Text("🎤  음성 입력") },
-                onClick = { open = false; stub("음성 입력") },
+                onClick = { open = false; onVoiceClick?.invoke() },
             )
             HorizontalDivider()
             DropdownMenuItem(

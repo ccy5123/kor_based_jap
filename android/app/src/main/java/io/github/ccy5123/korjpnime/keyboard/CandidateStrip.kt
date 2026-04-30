@@ -50,6 +50,7 @@ fun CandidateStrip(
     onSystemImeSettings: (() -> Unit)? = null,
     onClipboardClick: (() -> Unit)? = null,
     onEmojiClick: (() -> Unit)? = null,
+    onVoiceClick: (() -> Unit)? = null,
 ) {
     val baseModifier = Modifier
         .fillMaxWidth()
@@ -132,6 +133,7 @@ fun CandidateStrip(
                 onSystemImeSettings = onSystemImeSettings,
                 onClipboardClick = onClipboardClick,
                 onEmojiClick = onEmojiClick,
+                onVoiceClick = onVoiceClick,
             )
         }
     }
