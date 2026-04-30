@@ -2,7 +2,7 @@
 Third-party licenses for the bundled dictionary / Viterbi data
 ================================================================================
 
-KorJpnIme bundles six data files derived from open-source projects:
+KorJpnIme bundles seven data files derived from open-source projects:
 
   - assets/jpn_dict.txt   — kana → kanji static dictionary (legacy lookup)
                             [Mozc / IPAdic / Okinawa]
@@ -16,6 +16,9 @@ KorJpnIme bundles six data files derived from open-source projects:
                             [hermitdave/FrequencyWords MIT]
   - assets/en_words.txt   — English prefix-completion wordlist
                             [hermitdave/FrequencyWords MIT]
+  - assets/emoji_data.txt — Unicode emoji panel data (groups + skin
+                            tone variant index)
+                            [Unicode® emoji-test.txt — terms below]
 
 The first three derive from the same Mozc upstream.  hanja_dict.txt is
 filtered from libhangul's data/hanja/hanja.txt to single-Hangul → single-
@@ -219,3 +222,22 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+================================================================================
+6. Unicode emoji-test.txt — Unicode® Terms of Use
+================================================================================
+
+Source: https://unicode.org/Public/emoji/latest/emoji-test.txt (v17.0)
+Filtered to fully-qualified emoji codepoints (skin-tone variants moved
+to a separate index for long-press surfacing).  Used as the data source
+for the keyboard's emoji panel — emoji glyphs themselves are rendered
+by the system's installed emoji font, not bundled.
+
+© 2025 Unicode®, Inc.  Unicode and the Unicode Logo are registered
+trademarks of Unicode, Inc. in the U.S. and other countries.
+
+Distribution of the data is permitted under the Unicode Terms of Use
+(https://www.unicode.org/terms_of_use.html), which permits making
+copies of the Unicode Files free of charge for any number of internal
+or external uses, provided the copyright notice and this permission
+notice are included.

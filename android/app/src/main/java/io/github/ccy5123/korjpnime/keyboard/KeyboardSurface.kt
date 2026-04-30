@@ -47,10 +47,14 @@ fun KeyboardSurface(
     clipboardItems: List<String> = emptyList(),
     onClipboardPick: (String) -> Unit = {},
     onClipboardDelete: (String) -> Unit = {},
+    emojiCategories: List<io.github.ccy5123.korjpnime.engine.EmojiData.Category> = emptyList(),
+    emojiRecents: List<String> = emptyList(),
+    onEmojiPick: (String) -> Unit = {},
 ) {
     val tokens = resolveTokens(direction, dark, LocalContext.current)
     var expanded by remember { mutableStateOf(false) }
     var showClipboard by remember { mutableStateOf(false) }
+    var showEmoji by remember { mutableStateOf(false) }
     // Auto-collapse when candidates clear (user picked, run reset, etc.)
     LaunchedEffect(candidates) { if (candidates.isEmpty()) expanded = false }
 
@@ -76,6 +80,7 @@ fun KeyboardSurface(
             onSettingsClick = onSettingsClick,
             onSystemImeSettings = onSystemImeSettings,
             onClipboardClick = { showClipboard = true },
+            onEmojiClick = { showEmoji = true },
         )
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             // ENGLISH mode always renders QWERTY regardless of the user's
@@ -117,6 +122,15 @@ fun KeyboardSurface(
                     },
                     onClose = { showClipboard = false },
                     onDelete = onClipboardDelete,
+                )
+            }
+            if (showEmoji) {
+                EmojiPanel(
+                    tokens = tokens,
+                    categories = emojiCategories,
+                    recents = emojiRecents,
+                    onPick = onEmojiPick,
+                    onClose = { showEmoji = false },
                 )
             }
         }

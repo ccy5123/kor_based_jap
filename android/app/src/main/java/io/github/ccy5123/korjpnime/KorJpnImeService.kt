@@ -32,6 +32,8 @@ import io.github.ccy5123.korjpnime.data.KeyboardPreferences
 import io.github.ccy5123.korjpnime.engine.BatchimLookup
 import io.github.ccy5123.korjpnime.engine.CheonjiinComposer
 import io.github.ccy5123.korjpnime.engine.ClipboardHistory
+import io.github.ccy5123.korjpnime.engine.EmojiData
+import io.github.ccy5123.korjpnime.engine.EmojiHistory
 import io.github.ccy5123.korjpnime.engine.Connector
 import io.github.ccy5123.korjpnime.engine.Dictionary
 import io.github.ccy5123.korjpnime.engine.HangulComposer
@@ -201,6 +203,16 @@ class KorJpnImeService :
     private val _clipboardItems = MutableStateFlow<List<String>>(emptyList())
     val clipboardItems: StateFlow<List<String>> = _clipboardItems.asStateFlow()
 
+    /**
+     * Bundled Unicode emoji data + per-user history of recently picked
+     * emojis.  Surfaced by the ⋯ menu's 이모지 entry as a tab-and-grid
+     * panel above the keyboard.
+     */
+    private val emojiData = EmojiData()
+    private lateinit var emojiHistory: EmojiHistory
+    private val _emojiRecents = MutableStateFlow<List<String>>(emptyList())
+    val emojiRecents: StateFlow<List<String>> = _emojiRecents.asStateFlow()
+
     private val clipChangedListener = ClipboardManager.OnPrimaryClipChangedListener {
         val cm = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager ?: return@OnPrimaryClipChangedListener
         val clip = cm.primaryClip ?: return@OnPrimaryClipChangedListener
@@ -237,6 +249,8 @@ class KorJpnImeService :
         userDict = UserDict(applicationContext)
         clipboardHistory = ClipboardHistory(applicationContext)
         _clipboardItems.value = clipboardHistory.items
+        emojiHistory = EmojiHistory(applicationContext)
+        _emojiRecents.value = emojiHistory.items
         // Register the clipboard change listener so any copy events that
         // happen while the IME is alive get appended to the history.
         // (Android 10+ background apps can't read the clipboard, but our
@@ -277,6 +291,11 @@ class KorJpnImeService :
             refreshCandidates()  // in case prefix was already set pre-load
         }
         lifecycleScope.launch {
+            // Emoji panel data (~50 KB, ~1900 base emojis).  Loaded once,
+            // surfaced on first ⋯ → 이모지 panel open.
+            emojiData.load(applicationContext)
+        }
+        lifecycleScope.launch {
             // Viterbi data is bigger (~71 MB across two files) and gets
             // extracted to internal storage on first run, so first-launch
             // load is ~1–2 s.  Subsequent launches just mmap the cached
@@ -304,6 +323,7 @@ class KorJpnImeService :
                 .collectAsState(initial = InputLanguage.JAPANESE)
             val candidateList by candidates.collectAsState()
             val clipboardList by clipboardItems.collectAsState()
+            val emojiRecentList by emojiRecents.collectAsState()
 
             val direction = DIRECTIONS.firstOrNull { it.id == directionId } ?: DIRECTIONS.first()
             val systemDark = isSystemInDarkTheme()
@@ -333,6 +353,9 @@ class KorJpnImeService :
                             clipboardHistory.remove(item)
                             _clipboardItems.value = clipboardHistory.items
                         },
+                        emojiCategories = emojiData.categories(),
+                        emojiRecents = emojiRecentList,
+                        onEmojiPick = ::handleEmojiPick,
                     )
                 }
             }
@@ -829,6 +852,20 @@ class KorJpnImeService :
         val ic = currentInputConnection ?: return
         finalizeForCursor(ic)
         batched(ic) { ic.commitText(text, 1) }
+    }
+
+    /**
+     * Commit the picked emoji at the current cursor and push it to the
+     * recents history.  Doesn't dismiss the panel — the user often wants
+     * to chain multiple emojis (e.g. 🎉🎂🥳); the panel's ✕ button is
+     * how they leave.
+     */
+    fun handleEmojiPick(emoji: String) {
+        val ic = currentInputConnection ?: return
+        finalizeForCursor(ic)
+        batched(ic) { ic.commitText(emoji, 1) }
+        emojiHistory.add(emoji)
+        _emojiRecents.value = emojiHistory.items
     }
 
     private fun handleAction(action: KeyAction) {

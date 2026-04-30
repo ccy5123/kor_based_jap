@@ -88,6 +88,7 @@ internal fun UtilityMenu(
     onSettingsClick: (() -> Unit)?,
     onSystemImeSettings: (() -> Unit)?,
     onClipboardClick: (() -> Unit)? = null,
+    onEmojiClick: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var open by remember { mutableStateOf(false) }
@@ -116,7 +117,7 @@ internal fun UtilityMenu(
         ) {
             DropdownMenuItem(
                 text = { Text("🎨  이모지") },
-                onClick = { open = false; stub("이모지") },
+                onClick = { open = false; onEmojiClick?.invoke() },
             )
             DropdownMenuItem(
                 text = { Text("📋  클립보드") },
