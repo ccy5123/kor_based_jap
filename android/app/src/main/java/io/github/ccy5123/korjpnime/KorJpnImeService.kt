@@ -393,7 +393,7 @@ class KorJpnImeService :
         val effective = effectiveConversionWindow()
         val combined = LinkedHashSet<String>()
         // 1. User pick history (most-recent-first).
-        combined.addAll(userDict.getUserCandidates(effective))
+        combined.addAll(userDict.getUserCandidates(InputLanguage.JAPANESE, effective))
         // 2. Viterbi top-K segmented kanji conversions — the M3 engine.
         //    Surfaces best-cost segmentations like わたしの → 私の that the
         //    simple dict can't produce because it requires an exact-key
@@ -434,14 +434,28 @@ class KorJpnImeService :
         // ENG mode: composer is always empty so preedit is "".
         val effective = currentWordPrefix + composer.preedit()
         if (effective.isEmpty()) return emptyList()
+        // LinkedHashSet preserves insertion order while de-duplicating —
+        // user-pick history surfaces FIRST so frequent personal picks
+        // outrank generic-frequency wordlist hits.
+        val combined = LinkedHashSet<String>()
         return when (inputLanguage) {
-            InputLanguage.KOREAN -> korWordlist.lookup(effective, candidateCount)
+            InputLanguage.KOREAN -> {
+                combined.addAll(userDict.getUserCandidates(InputLanguage.KOREAN, effective))
+                combined.addAll(korWordlist.lookup(effective, candidateCount))
+                combined.toList().take(candidateCount)
+            }
             InputLanguage.ENGLISH -> {
                 val lower = effective.lowercase()
-                val raw = enWordlist.lookup(lower, candidateCount)
-                if (effective.firstOrNull()?.isUpperCase() == true) {
-                    raw.map { it.replaceFirstChar { c -> c.uppercase() } }
-                } else raw
+                val capitalize = effective.firstOrNull()?.isUpperCase() == true
+                fun cased(w: String) =
+                    if (capitalize) w.replaceFirstChar { it.uppercase() } else w
+                // UserDict stored under lowercased prefix so picks across
+                // capitalisation styles share the same history.
+                combined.addAll(
+                    userDict.getUserCandidates(InputLanguage.ENGLISH, lower).map { cased(it) }
+                )
+                combined.addAll(enWordlist.lookup(lower, candidateCount).map { cased(it) })
+                combined.toList().take(candidateCount)
             }
             else -> emptyList()
         }
@@ -528,6 +542,19 @@ class KorJpnImeService :
             val committedPrefix = currentWordPrefix
             val preedit = composer.preedit()
             if (committedPrefix.isEmpty() && preedit.isEmpty()) return
+            // Record the pick under the FULL prefix (committed + preedit)
+            // so a future re-typing of the same prefix surfaces this
+            // word first.  ENG records under the lowercased prefix so
+            // picks across capitalisation styles share one history.
+            val pickHistoryKey = when (inputLanguage) {
+                InputLanguage.ENGLISH -> (committedPrefix + preedit).lowercase()
+                else -> committedPrefix + preedit
+            }
+            val pickHistoryValue = when (inputLanguage) {
+                InputLanguage.ENGLISH -> picked.lowercase()
+                else -> picked
+            }
+            userDict.recordPick(inputLanguage, pickHistoryKey, pickHistoryValue)
             composer.reset()
             batched(ic) {
                 if (committedPrefix.isNotEmpty()) {
@@ -542,7 +569,7 @@ class KorJpnImeService :
 
         val window = effectiveConversionWindow()
         if (window.isEmpty()) return
-        userDict.recordPick(window, picked)
+        userDict.recordPick(InputLanguage.JAPANESE, window, picked)
         // Composing region holds the entire kana run; pick replaces only
         // the active window.  When the user adjusted the boundary via
         // ◀ / ▶ there's a tail (currentKanaRun beyond the window) that
