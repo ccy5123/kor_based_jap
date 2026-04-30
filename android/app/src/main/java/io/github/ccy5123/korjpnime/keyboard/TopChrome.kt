@@ -87,6 +87,7 @@ internal fun UtilityMenu(
     tokens: KeyboardTokens,
     onSettingsClick: (() -> Unit)?,
     onSystemImeSettings: (() -> Unit)?,
+    onClipboardClick: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var open by remember { mutableStateOf(false) }
@@ -119,7 +120,7 @@ internal fun UtilityMenu(
             )
             DropdownMenuItem(
                 text = { Text("📋  클립보드") },
-                onClick = { open = false; stub("클립보드") },
+                onClick = { open = false; onClipboardClick?.invoke() },
             )
             DropdownMenuItem(
                 text = { Text("🎤  음성 입력") },

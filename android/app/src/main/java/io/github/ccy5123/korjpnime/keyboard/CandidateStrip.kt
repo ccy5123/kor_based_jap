@@ -48,6 +48,7 @@ fun CandidateStrip(
     inputLanguage: InputLanguage = InputLanguage.JAPANESE,
     onSettingsClick: (() -> Unit)? = null,
     onSystemImeSettings: (() -> Unit)? = null,
+    onClipboardClick: (() -> Unit)? = null,
 ) {
     val baseModifier = Modifier
         .fillMaxWidth()
@@ -128,6 +129,7 @@ fun CandidateStrip(
                 tokens = tokens,
                 onSettingsClick = onSettingsClick,
                 onSystemImeSettings = onSystemImeSettings,
+                onClipboardClick = onClipboardClick,
             )
         }
     }

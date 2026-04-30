@@ -44,9 +44,13 @@ fun KeyboardSurface(
     onAction: (KeyAction) -> Unit = {},
     onSettingsClick: (() -> Unit)? = null,
     onSystemImeSettings: (() -> Unit)? = null,
+    clipboardItems: List<String> = emptyList(),
+    onClipboardPick: (String) -> Unit = {},
+    onClipboardDelete: (String) -> Unit = {},
 ) {
     val tokens = resolveTokens(direction, dark, LocalContext.current)
     var expanded by remember { mutableStateOf(false) }
+    var showClipboard by remember { mutableStateOf(false) }
     // Auto-collapse when candidates clear (user picked, run reset, etc.)
     LaunchedEffect(candidates) { if (candidates.isEmpty()) expanded = false }
 
@@ -71,6 +75,7 @@ fun KeyboardSurface(
             inputLanguage = inputLanguage,
             onSettingsClick = onSettingsClick,
             onSystemImeSettings = onSystemImeSettings,
+            onClipboardClick = { showClipboard = true },
         )
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             // ENGLISH mode always renders QWERTY regardless of the user's
@@ -100,6 +105,18 @@ fun KeyboardSurface(
                         expanded = false
                     },
                     onClose = { expanded = false },
+                )
+            }
+            if (showClipboard) {
+                ClipboardPanel(
+                    tokens = tokens,
+                    items = clipboardItems,
+                    onPick = {
+                        onClipboardPick(it)
+                        showClipboard = false
+                    },
+                    onClose = { showClipboard = false },
+                    onDelete = onClipboardDelete,
                 )
             }
         }

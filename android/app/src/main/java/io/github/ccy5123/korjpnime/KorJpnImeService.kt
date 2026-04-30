@@ -1,5 +1,6 @@
 package io.github.ccy5123.korjpnime
 
+import android.content.ClipboardManager
 import android.content.Intent
 import android.provider.Settings
 import android.inputmethodservice.InputMethodService
@@ -30,6 +31,7 @@ import androidx.savedstate.SavedStateRegistryOwner
 import io.github.ccy5123.korjpnime.data.KeyboardPreferences
 import io.github.ccy5123.korjpnime.engine.BatchimLookup
 import io.github.ccy5123.korjpnime.engine.CheonjiinComposer
+import io.github.ccy5123.korjpnime.engine.ClipboardHistory
 import io.github.ccy5123.korjpnime.engine.Connector
 import io.github.ccy5123.korjpnime.engine.Dictionary
 import io.github.ccy5123.korjpnime.engine.HangulComposer
@@ -187,6 +189,30 @@ class KorJpnImeService :
     private lateinit var userDict: UserDict
 
     /**
+     * Most-recent-first clipboard history, populated by a system
+     * [ClipboardManager.OnPrimaryClipChangedListener] registered in
+     * [onCreate].  Surfaced by the ⋯ menu's 클립보드 entry as a
+     * tap-to-paste panel above the keyboard.
+     */
+    private lateinit var clipboardHistory: ClipboardHistory
+
+    /** StateFlow mirror of [clipboardHistory] so the Compose UI recomposes when
+     *  new items arrive.  Updated synchronously from the change listener. */
+    private val _clipboardItems = MutableStateFlow<List<String>>(emptyList())
+    val clipboardItems: StateFlow<List<String>> = _clipboardItems.asStateFlow()
+
+    private val clipChangedListener = ClipboardManager.OnPrimaryClipChangedListener {
+        val cm = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager ?: return@OnPrimaryClipChangedListener
+        val clip = cm.primaryClip ?: return@OnPrimaryClipChangedListener
+        if (clip.itemCount == 0) return@OnPrimaryClipChangedListener
+        val text = clip.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
+        if (text.isNotEmpty()) {
+            clipboardHistory.add(text)
+            _clipboardItems.value = clipboardHistory.items
+        }
+    }
+
+    /**
      * Run of consecutive hiragana characters most recently committed to the
      * editor.  Updated by [emit] / [onCharsDeleted]; reset on any non-kana
      * commit, on candidate selection, on backspace into committed text past
@@ -209,6 +235,14 @@ class KorJpnImeService :
         savedStateRegistryController.performRestore(null)
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
         userDict = UserDict(applicationContext)
+        clipboardHistory = ClipboardHistory(applicationContext)
+        _clipboardItems.value = clipboardHistory.items
+        // Register the clipboard change listener so any copy events that
+        // happen while the IME is alive get appended to the history.
+        // (Android 10+ background apps can't read the clipboard, but our
+        // IME is foreground while attached to an editor.)
+        (getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager)
+            ?.addPrimaryClipChangedListener(clipChangedListener)
         // Cache haptics preference for handleAction's sync read.  Mode is read
         // directly via collectAsState in onCreateInputView's composable since
         // that path is already async-friendly.
@@ -269,6 +303,7 @@ class KorJpnImeService :
             val inputLang by KeyboardPreferences.inputLanguageFlow(applicationContext)
                 .collectAsState(initial = InputLanguage.JAPANESE)
             val candidateList by candidates.collectAsState()
+            val clipboardList by clipboardItems.collectAsState()
 
             val direction = DIRECTIONS.firstOrNull { it.id == directionId } ?: DIRECTIONS.first()
             val systemDark = isSystemInDarkTheme()
@@ -292,6 +327,12 @@ class KorJpnImeService :
                         onAction = ::handleAction,
                         onSettingsClick = ::openSettings,
                         onSystemImeSettings = ::openSystemImeSettings,
+                        clipboardItems = clipboardList,
+                        onClipboardPick = ::handleClipboardPick,
+                        onClipboardDelete = { item ->
+                            clipboardHistory.remove(item)
+                            _clipboardItems.value = clipboardHistory.items
+                        },
                     )
                 }
             }
@@ -771,9 +812,23 @@ class KorJpnImeService :
     }
 
     override fun onDestroy() {
+        (getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager)
+            ?.removePrimaryClipChangedListener(clipChangedListener)
         lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
         store.clear()
         super.onDestroy()
+    }
+
+    /**
+     * Commit the picked clipboard text at the current cursor.  Behaves
+     * like a paste — bypasses the composer entirely (any in-progress
+     * preedit / kana run is finalised first via [finalizeForCursor]).
+     * Reachable from the ⋯ menu's 클립보드 panel.
+     */
+    fun handleClipboardPick(text: String) {
+        val ic = currentInputConnection ?: return
+        finalizeForCursor(ic)
+        batched(ic) { ic.commitText(text, 1) }
     }
 
     private fun handleAction(action: KeyAction) {
