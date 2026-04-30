@@ -329,14 +329,24 @@ private fun CjLetters(
                             onRightClick = onLanguageCycle,
                             onRightLongPress = { onAction(KeyAction.SwitchIme) },
                         )
-                        CjCell.Hanja -> Key(
-                            tokens, shape, fn = true, label = "한자",
-                            // Trigger syllable-by-syllable kanji conversion
-                            // on the current run.  Wired later — placeholder
-                            // for now per the user's "일단 키만 놔두고
-                            // 작동은 나중에" request.
-                            onClick = { /* TODO: Hanja conversion */ },
-                        )
+                        CjCell.Hanja -> {
+                            // Same physical slot, language-aware semantics:
+                            //   - KOR: "한자" → single-syllable Hangul→Hanja
+                            //   - JPN: "再変換" → reconvert the most recent
+                            //     kanji pick (re-surfaces the candidate strip
+                            //     so the user can swap to a different kanji
+                            //     for the same reading).
+                            //   - ENG: ENG never renders Cheonjiin (forced
+                            //     QWERTY at KeyboardSurface), so this branch
+                            //     can only be hit if a future direction
+                            //     surfaces it — fall back to "한자" as KOR.
+                            val (label, action) = when (inputLanguage) {
+                                InputLanguage.JAPANESE -> "再変換" to KeyAction.Reconvert
+                                else -> "한자" to KeyAction.Hanja
+                            }
+                            Key(tokens, shape, fn = true, label = label,
+                                onClick = { onAction(action) })
+                        }
                     }
                 }
             }

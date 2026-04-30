@@ -1,20 +1,31 @@
 ================================================================================
-Third-party licenses for jpn_dict.txt
+Third-party licenses for the bundled dictionary / Viterbi data
 ================================================================================
 
-The kana-to-kanji dictionary `jpn_dict.txt` shipped with KorJpnIme is built
-from Google Mozc's Open Source dictionary data, which itself derives from the
-NAIST IPAdic and the Okinawa Public-Domain Dictionary.  This file documents
-each upstream's license, as required by their terms.
+KorJpnIme bundles four data files derived from open-source projects:
+
+  - assets/jpn_dict.txt   — kana → kanji static dictionary (legacy lookup)
+                            [Mozc / IPAdic / Okinawa]
+  - assets/kj_dict.bin    — rich kana dictionary with lid/rid/cost (Viterbi)
+                            [Mozc / IPAdic / Okinawa]
+  - assets/kj_conn.bin    — POS-pair connection cost matrix (Viterbi)
+                            [Mozc / IPAdic / Okinawa]
+  - assets/hanja_dict.txt — Hangul → Hanja syllable conversion table
+                            [libhangul / Choe Hwanjin BSD-3-clause]
+
+The first three derive from the same Mozc upstream; the fourth is filtered
+from libhangul's data/hanja/hanja.txt to single-Hangul → single-Hanja entries.
+This file MUST ship alongside the data per the IPAdic terms (and is good
+practice for the BSD-3-clause-licensed libhangul data too).
 
 Build pipeline:
     upstream Mozc src/data/dictionary_oss/dictionary00..09.txt  (~1.3 M rows)
         |
-        v
-    dict/build_dict_mozc.py  (filter + sort + dedupe by lowest cost)
+        +--> dict/build_dict_mozc.py     ----> dict/jpn_dict.txt
+        |    (filter + sort + dedupe)
         |
-        v
-    dict/jpn_dict.txt        (kana<TAB>kanji_1<TAB>kanji_2<TAB>... lines)
+        +--> dict/build_viterbi_data.py  ----> dict/kj_dict.bin + kj_conn.bin
+             (mmap-friendly binary tables)
 
 Sources:
     https://github.com/google/mozc/tree/master/src/data/dictionary_oss
@@ -135,3 +146,38 @@ above as far as the program is concerned.
 Public Domain Data.  使用・変更・配布に関しては一切の制限をつけません。
 商品などに組み込むことも自由に行なってください。
 http://sourceforge.jp/projects/o-dic/
+
+================================================================================
+4. libhangul Hanja dictionary (assets/hanja_dict.txt) — BSD-3-clause
+================================================================================
+
+Copyright (c) 2005,2006 Choe Hwanjin
+All rights reserved.
+
+Source: https://github.com/libhangul/libhangul (data/hanja/hanja.txt)
+Filtered to single Hangul-syllable -> single Hanja entries for use as the
+한자 key conversion table.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+3. Neither the name of the author nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.

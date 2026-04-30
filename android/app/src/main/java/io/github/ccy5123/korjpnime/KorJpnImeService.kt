@@ -29,6 +29,7 @@ import io.github.ccy5123.korjpnime.engine.CheonjiinComposer
 import io.github.ccy5123.korjpnime.engine.Connector
 import io.github.ccy5123.korjpnime.engine.Dictionary
 import io.github.ccy5123.korjpnime.engine.HangulComposer
+import io.github.ccy5123.korjpnime.engine.HanjaDictionary
 import io.github.ccy5123.korjpnime.engine.RichDictionary
 import io.github.ccy5123.korjpnime.engine.UserDict
 import io.github.ccy5123.korjpnime.engine.Viterbi
@@ -110,6 +111,30 @@ class KorJpnImeService :
     private val dictionary = Dictionary()
 
     /**
+     * Hangul → Hanja syllable dictionary.  Loaded once asynchronously
+     * from `assets/hanja_dict.txt`.  Used only when the user taps the
+     * 한자 key in Korean mode; results surface in the candidate strip.
+     */
+    private val hanjaDictionary = HanjaDictionary()
+
+    /**
+     * Hangul syllable currently being offered for Hanja conversion.
+     * Set by [handleHanja] when the user taps 한자; cleared on the
+     * next non-Hanja action (so picking a candidate replaces this
+     * syllable with the chosen Hanja, then disengages Hanja mode).
+     */
+    private var hanjaConversionSyllable: Char? = null
+
+    /**
+     * Most recent committed kana → kanji pick (`(kana, picked_kanji)`).
+     * Updated in [handleCandidatePick] every time the user accepts a
+     * kanji from the strip.  Consulted by [handleReconvert] (the JP-mode
+     * 再変換 key) to undo the commit and re-surface the candidate strip
+     * so the user can swap to a different kanji for the same reading.
+     */
+    private var lastKanaPick: Pair<String, String>? = null
+
+    /**
      * M3 Viterbi engine — RichDictionary + Connector mmap'd from
      * `assets/kj_dict.bin` and `assets/kj_conn.bin`.  Once loaded, the
      * top-K segmented results surface ABOVE the simple-dict candidates.
@@ -169,6 +194,11 @@ class KorJpnImeService :
             // Candidates stay empty until this completes.
             dictionary.load(applicationContext)
             refreshCandidates()  // in case kana was already committed pre-load
+        }
+        lifecycleScope.launch {
+            // Hangul→Hanja dict — small (~430 KB / 28 K entries), loads in
+            // tens of ms.  Only consulted when the user taps the 한자 key.
+            hanjaDictionary.load(applicationContext)
         }
         lifecycleScope.launch {
             // Viterbi data is bigger (~71 MB across two files) and gets
@@ -296,21 +326,76 @@ class KorJpnImeService :
     }
 
     /**
-     * Replace the recent kana run with the user-picked kanji.  Wrapped in a
+     * Replace the recent kana run (or the Hangul syllable being offered for
+     * Hanja conversion) with the user's picked candidate.  Wrapped in a
      * batch so the delete + commit pair applies atomically.  Records the
-     * pick in [UserDict] so the same kana surfaces this kanji first next
-     * time.
+     * pick in [UserDict] when it's a kana → kanji conversion so the same
+     * kana surfaces this kanji first next time.
      */
-    private fun handleCandidatePick(kanji: String) {
+    private fun handleCandidatePick(picked: String) {
         val ic = currentInputConnection ?: return
+
+        // Hanja path takes precedence: if the 한자 key just primed a syllable,
+        // a candidate tap replaces THAT syllable (committed Hangul) rather
+        // than the kana run.  Candidates carry a "<meaning> <hanja>" display
+        // form (e.g. "백성 民") for disambiguation; we commit only the
+        // trailing Hanja character.  Gated to one tap — picking clears the
+        // priming so subsequent taps fall back to kana mode.
+        val hanjaSyllable = hanjaConversionSyllable
+        if (hanjaSyllable != null) {
+            val hanja = picked.lastOrNull()?.toString().orEmpty()
+            if (hanja.isNotEmpty()) {
+                batched(ic) {
+                    ic.deleteSurroundingText(1, 0)
+                    ic.commitText(hanja, 1)
+                }
+            }
+            hanjaConversionSyllable = null
+            _candidates.value = emptyList()
+            return
+        }
+
         val pickedFromKana = currentKanaRun
         if (pickedFromKana.isEmpty()) return
-        userDict.recordPick(pickedFromKana, kanji)
+        userDict.recordPick(pickedFromKana, picked)
         batched(ic) {
             ic.deleteSurroundingText(pickedFromKana.length, 0)
-            ic.commitText(kanji, 1)
+            ic.commitText(picked, 1)
         }
+        // Stash the (kana, picked) pair so the JP-mode 再変換 key can roll
+        // back this commit and re-surface candidates.  Replaced on every
+        // subsequent pick — only the IMMEDIATE last commit is reconvertible.
+        lastKanaPick = pickedFromKana to picked
         currentKanaRun = ""
+        refreshCandidates()
+    }
+
+    /**
+     * Japanese 再変換 (reconvert) handler.  If the most recent kana → kanji
+     * pick is still sitting at the cursor (text-before-cursor matches the
+     * stored picked kanji), peel it back off the editor and restore
+     * [currentKanaRun] to the original kana so [refreshCandidates] re-
+     * surfaces the strip — the user can then pick a different kanji for
+     * the same reading without backspacing.
+     *
+     * No-op when:
+     *   - no recent pick is stored (fresh session, post-flush, etc.);
+     *   - the cursor moved or other text was committed since the pick
+     *     (the picked kanji is no longer the immediate text-before-cursor);
+     *   - the input language isn't JAPANESE — the key is wired for KOR
+     *     (Hanja) and JP (Reconvert) only, but defensive guard here.
+     */
+    private fun handleReconvert(ic: InputConnection) {
+        if (inputLanguage != InputLanguage.JAPANESE) return
+        val (kana, picked) = lastKanaPick ?: return
+        val before = ic.getTextBeforeCursor(picked.length, 0)?.toString() ?: ""
+        if (before != picked) return  // intervening edit — not safe to reconvert
+        batched(ic) {
+            ic.deleteSurroundingText(picked.length, 0)
+        }
+        currentKanaRun = kana
+        // Don't clear lastKanaPick yet — the next handleCandidatePick will
+        // replace it.  refreshCandidates rebuilds the strip from kanaRun.
         refreshCandidates()
     }
 
@@ -444,6 +529,13 @@ class KorJpnImeService :
         if (!isCjTap && action != KeyAction.Space) {
             cheonjiin.reset()
         }
+        // Hanja conversion priming is per-tap: any action other than tapping
+        // Hanja itself (or picking a candidate, which clears the priming
+        // inline) invalidates the syllable selection.  Otherwise a stale
+        // priming would hijack later candidate picks in JP mode.
+        if (action != KeyAction.Hanja) {
+            hanjaConversionSyllable = null
+        }
         when (action) {
             is KeyAction.Commit -> handleCommit(ic, action.text)
             is KeyAction.CjConsonant -> handleCjOps(ic, cheonjiin.tapConsonant(action.cycle, System.currentTimeMillis()))
@@ -455,9 +547,61 @@ class KorJpnImeService :
             KeyAction.SwitchIme -> { batched(ic) { flushComposerInner(ic) }; switchIme() }
             KeyAction.CursorLeft -> { batched(ic) { flushComposerInner(ic) }; sendCursor(ic, KeyEvent.KEYCODE_DPAD_LEFT) }
             KeyAction.CursorRight -> { batched(ic) { flushComposerInner(ic) }; sendCursor(ic, KeyEvent.KEYCODE_DPAD_RIGHT) }
+            KeyAction.Hanja -> handleHanja(ic)
+            KeyAction.Reconvert -> handleReconvert(ic)
             KeyAction.Shift -> Unit       // BeolsikLayout owns the Shift state; service receives the action only for haptic
             KeyAction.Symbols -> Unit     // page state lives in the layout composables
         }
+    }
+
+    /**
+     * Korean 한자 conversion entry point — peeks the most recent Hangul
+     * syllable in the editor, looks up Hanja candidates, and surfaces
+     * them in the candidate strip.  The user picks one with a tap and
+     * [handleCandidatePick] (Hanja branch) replaces the syllable in the
+     * editor.
+     *
+     * Only meaningful in Korean mode (where the user is committing
+     * Hangul); in Japanese / English mode the syllable peek will return
+     * non-Hangul, the lookup returns empty, and the candidate strip
+     * stays as-is.
+     */
+    private fun handleHanja(ic: InputConnection) {
+        // Flush any in-progress preedit first so the syllable we peek is
+        // committed text, not the underlined region.
+        if (!composer.empty()) {
+            batched(ic) { flushComposerInner(ic) }
+        }
+        val before = ic.getTextBeforeCursor(1, 0)?.toString() ?: ""
+        if (before.isEmpty()) return
+        val syllable = before[0]
+        val entries = hanjaDictionary.lookup(syllable)
+        if (entries.isEmpty()) return
+        hanjaConversionSyllable = syllable
+        // Surface candidates as "<meaning> <hanja>" (e.g. "백성 民") so the
+        // user can disambiguate visually.  The strip's pick handler
+        // (handleCandidatePick, Hanja branch) commits just the trailing
+        // Hanja char, not the gloss prefix.
+        _candidates.value = entries.map { formatHanjaCandidate(it) }
+    }
+
+    /**
+     * Render a Hanja entry for the candidate strip.  libhangul glosses are
+     * "<meaning> <reading>" and may carry multiple comma-separated meaning
+     * variants for Hanja with several readings (e.g. "감동할 가, 찌를 감").
+     * We:
+     *   - take the FIRST meaning segment (before any comma);
+     *   - drop the trailing reading syllable from that segment (it's just
+     *     the Hangul we already typed; redundant alongside the Hanja);
+     *   - append the Hanja, e.g. "백성 民".
+     * Glosses without a reading suffix or empty glosses fall back to the
+     * raw Hanja character.
+     */
+    private fun formatHanjaCandidate(entry: HanjaDictionary.Entry): String {
+        val firstMeaning = entry.gloss.substringBefore(',').trim()
+        val withoutReading = firstMeaning.substringBeforeLast(' ', missingDelimiterValue = "")
+        return if (withoutReading.isEmpty()) entry.hanja.toString()
+        else "$withoutReading ${entry.hanja}"
     }
 
     /**

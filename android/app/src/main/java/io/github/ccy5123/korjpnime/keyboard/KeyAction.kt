@@ -57,4 +57,14 @@ sealed class KeyAction {
 
     /** Symbols / numbers page. No-op in D2. */
     object Symbols : KeyAction()
+
+    /** Korean 한자 conversion — service looks up the most recent Hangul
+     *  syllable in the editor and surfaces single-character Hanja
+     *  candidates in the candidate strip. */
+    object Hanja : KeyAction()
+
+    /** Japanese 再変換 (reconvert) — re-surface kana → kanji candidates for
+     *  the most recently committed kanji pick, so the user can swap to a
+     *  different reading of the same kana without backspacing first. */
+    object Reconvert : KeyAction()
 }
