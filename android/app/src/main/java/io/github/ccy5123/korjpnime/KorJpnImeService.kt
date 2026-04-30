@@ -259,16 +259,36 @@ class KorJpnImeService :
      * Commit [text] to the editor and update the kana-run tracker.  All
      * commit paths route through here so [currentKanaRun] / [candidates]
      * stay in sync with the editor's actual content.
+     *
+     * **JP mode (hiragana)**: kana goes into the editor's COMPOSING region
+     * (rendered with the system underline) so the user sees what's the
+     * current conversion target — addresses the "어디부터 어디까지가
+     * 변환의 대상인지 가끔 헷갈린다" feedback.  [currentKanaRun]
+     * accumulates; the composing region width grows with it until the user
+     * picks a candidate (which calls commitText → composing region replaced
+     * by the chosen kanji) or types something that breaks the run (punct /
+     * digits / cursor / mode switch — see the else branch).  Caller
+     * (handleCommit / handleCjOps) appends [HangulComposer.preedit] to the
+     * composing region after this call so the in-progress jamo stays
+     * visible alongside the accumulated kana.
+     *
+     * **Non-hiragana**: Hangul (KOR mode), ASCII (ENG / punctuation /
+     * digits), newline.  Finalises any pending kana run as committed text
+     * first (the user's moving on from kana conversion) then commits the
+     * new text.  KOR / ENG modes never accumulate kana, so currentKanaRun
+     * stays "" and finishComposingText is a no-op the first time through.
      */
     private fun emit(ic: InputConnection, text: String) {
         if (text.isEmpty()) return
-        ic.commitText(text, 1)
         if (isAllHiragana(text)) {
             currentKanaRun += text
+            ic.setComposingText(currentKanaRun, 1)
         } else {
-            // Non-hiragana terminator (kana mixed with kanji / punct / digit /
-            // English / etc.).  Run breaks; subsequent kana starts fresh.
-            currentKanaRun = ""
+            if (currentKanaRun.isNotEmpty()) {
+                ic.finishComposingText()
+                currentKanaRun = ""
+            }
+            ic.commitText(text, 1)
         }
         refreshCandidates()
     }
@@ -358,8 +378,11 @@ class KorJpnImeService :
         val pickedFromKana = currentKanaRun
         if (pickedFromKana.isEmpty()) return
         userDict.recordPick(pickedFromKana, picked)
+        // Composing region holds the kana run; commitText replaces the
+        // entire composing region with the picked kanji in a single op
+        // (no need for a separate deleteSurroundingText — composing region
+        // contents are NOT counted as surrounding text by Android's IC).
         batched(ic) {
-            ic.deleteSurroundingText(pickedFromKana.length, 0)
             ic.commitText(picked, 1)
         }
         // Stash the (kana, picked) pair so the JP-mode 再変換 key can roll
@@ -392,6 +415,12 @@ class KorJpnImeService :
         if (before != picked) return  // intervening edit — not safe to reconvert
         batched(ic) {
             ic.deleteSurroundingText(picked.length, 0)
+            // Restore the kana as a composing region (system underline) so
+            // the user visually sees what's the conversion target after
+            // reconvert.  Without this the kanji would just disappear and
+            // the kana would live only in the candidate strip — the user
+            // reads that as "사시미가 사라졌다".
+            ic.setComposingText(kana, 1)
         }
         currentKanaRun = kana
         // Don't clear lastKanaPick yet — the next handleCandidatePick will
@@ -414,7 +443,15 @@ class KorJpnImeService :
      */
     private fun cycleInputLanguage() {
         val ic = currentInputConnection
-        if (ic != null) batched(ic) { flushComposerInner(ic) }
+        if (ic != null) batched(ic) {
+            flushComposerInner(ic)
+            // After flush, any accumulated kana run is sitting in the
+            // composing region.  Finalize it as committed text before the
+            // mode switch so it doesn't visually carry over (and so it
+            // doesn't get accidentally replaced when the next mode emits
+            // into the same region).
+            if (currentKanaRun.isNotEmpty()) ic.finishComposingText()
+        }
         currentKanaRun = ""
         refreshCandidates()
         val next = when (inputLanguage) {
@@ -471,29 +508,33 @@ class KorJpnImeService :
         super.onUpdateSelection(
             oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd,
         )
-        if (composer.empty()) return
+        // Nothing to track — neither a Hangul preedit nor a JP-mode kana
+        // run is in flight, so any selection change is just plain editing.
+        if (composer.empty() && currentKanaRun.isEmpty()) return
 
         // Case 1: composing region is gone entirely (external clear).
-        // KakaoTalk clears the EditText after its own send button fires, the
-        // user tapped a different EditText, the app called setText(""), etc.
-        // Drop our state so the next jamo doesn't hand off its leftover (cho,
-        // jung, jong) into a fresh context (the bug that produced "요감사합니다").
+        // KakaoTalk clears the EditText after its own send button fires,
+        // the user tapped a different EditText, the app called setText(""),
+        // etc.  Drop our state so the next jamo / kana doesn't hand off its
+        // leftover into a fresh context (the bug that produced
+        // "요감사합니다" pre-fix; without this branch a stale kana run
+        // would also leak into the next field).
         if (candidatesStart < 0) {
             resetAllState()
             return
         }
 
         // Case 2: composing region exists but the cursor moved OUTSIDE it.
-        // This happens when the user taps elsewhere in the field mid-syllable
-        // (e.g. dragging the caret to insert text earlier in the sentence).
-        // Without this branch, the next keystroke would call setComposingText
-        // against the OLD region, replacing the underlined preedit instead of
-        // inserting at the new cursor position — the bug the user reported.
+        // The user tapped elsewhere mid-conversion (e.g. dragging the caret
+        // to insert text earlier in the sentence).  Without this branch,
+        // the next keystroke would call setComposingText against the OLD
+        // region, replacing the underlined preedit instead of inserting at
+        // the new cursor position.
         //
-        // Fix: finalize the existing composing region IN PLACE (commits the
-        // underlined preedit as committed text where it sits), then drop our
-        // composer so the next keystroke starts a fresh region at the new
-        // cursor position.
+        // Fix: finalize the existing composing region IN PLACE (commits
+        // the underlined preedit + accumulated kana as committed text
+        // where they sit), then drop our state so the next keystroke
+        // starts a fresh region at the new cursor position.
         val cursorOutsideRegion =
             newSelStart < candidatesStart || newSelStart > candidatesEnd ||
             newSelEnd < candidatesStart || newSelEnd > candidatesEnd
@@ -545,8 +586,8 @@ class KorJpnImeService :
             KeyAction.Backspace -> handleBackspace(ic)
             KeyAction.Enter -> { batched(ic) { flushComposerInner(ic) }; handleEnter() }
             KeyAction.SwitchIme -> { batched(ic) { flushComposerInner(ic) }; switchIme() }
-            KeyAction.CursorLeft -> { batched(ic) { flushComposerInner(ic) }; sendCursor(ic, KeyEvent.KEYCODE_DPAD_LEFT) }
-            KeyAction.CursorRight -> { batched(ic) { flushComposerInner(ic) }; sendCursor(ic, KeyEvent.KEYCODE_DPAD_RIGHT) }
+            KeyAction.CursorLeft -> { finalizeForCursor(ic); sendCursor(ic, KeyEvent.KEYCODE_DPAD_LEFT) }
+            KeyAction.CursorRight -> { finalizeForCursor(ic); sendCursor(ic, KeyEvent.KEYCODE_DPAD_RIGHT) }
             KeyAction.Hanja -> handleHanja(ic)
             KeyAction.Reconvert -> handleReconvert(ic)
             KeyAction.Shift -> Unit       // BeolsikLayout owns the Shift state; service receives the action only for haptic
@@ -726,7 +767,9 @@ class KorJpnImeService :
                     }
                 }
             }
-            ic.setComposingText(composer.preedit(), 1)
+            // Composing region = accumulated kana run + in-progress Hangul
+            // preedit (same shape as handleCommit's jamo branch).
+            ic.setComposingText(currentKanaRun + composer.preedit(), 1)
         }
     }
 
@@ -751,11 +794,24 @@ class KorJpnImeService :
      * its own.
      */
     private fun resyncComposerIfStale(ic: InputConnection) {
-        if (composer.empty()) return
-        val expected = composer.preedit()
+        if (composer.empty() && currentKanaRun.isEmpty()) return
+        // The composing region currently holds [accumulated kana run] +
+        // [in-progress Hangul preedit]; getTextBeforeCursor includes the
+        // composing region's contents, so the comparison is end-to-end.
+        val expected = currentKanaRun + composer.preedit()
         if (expected.isEmpty()) return
         val actual = ic.getTextBeforeCursor(expected.length, 0)?.toString() ?: return
         if (actual != expected) {
+            // Finalize the stale composing region (the underlined preedit /
+            // kana run still pinned to its old position) BEFORE resetting
+            // composer state.  Without this, the subsequent setComposingText
+            // call from the next keystroke would overwrite that region's
+            // content in place — surfacing as "underlined 한 disappears and
+            // new input appears WHERE 한 was, not where the cursor moved
+            // to" in Korean mode (and the same bug in JP mode whenever a
+            // mid-conversion field tap doesn't fire onUpdateSelection in
+            // time).
+            ic.finishComposingText()
             resetAllState()
         }
     }
@@ -785,11 +841,12 @@ class KorJpnImeService :
                 if (finalized.isNotEmpty()) {
                     emit(ic, convertForOutput(finalized, composer.currentChoJamo()))
                 }
-                // Preedit shows the in-progress Hangul syllable so the user
-                // sees what they're typing; the conversion-to-kana (or
-                // hangul-as-is in Korean mode) happens once the syllable
-                // closes — above branch.
-                ic.setComposingText(composer.preedit(), 1)
+                // Composing region = accumulated kana run (set by emit
+                // above on JP-mode hiragana emission, empty otherwise) +
+                // the in-progress Hangul preedit.  Both stay underlined so
+                // the user can see "what's been emitted as kana so far"
+                // alongside "the syllable I'm building right now".
+                ic.setComposingText(currentKanaRun + composer.preedit(), 1)
             } else {
                 // Punctuation, digits, kana, anything non-jamo — flush
                 // in-progress syllable first so it commits BEFORE the new text.
@@ -844,6 +901,23 @@ class KorJpnImeService :
     }
 
     /**
+     * Commit any in-progress preedit + kana run as committed text before a
+     * cursor-move op.  Without this the user moves the caret while the
+     * composing region is still anchored to the old position; the next
+     * keystroke would then overwrite the underlined preedit / kana instead
+     * of inserting at the new cursor (same root cause as the
+     * onUpdateSelection cursor-outside-region path, just hit pre-emptively).
+     */
+    private fun finalizeForCursor(ic: InputConnection) {
+        batched(ic) {
+            flushComposerInner(ic)
+            if (currentKanaRun.isNotEmpty()) ic.finishComposingText()
+        }
+        currentKanaRun = ""
+        refreshCandidates()
+    }
+
+    /**
      * Convert a finalized Hangul string (one or more syllables emitted by
      * [HangulComposer.input] or [HangulComposer.flush]) into the kana to
      * commit.  Each char's `nextJamo` lookahead is the next char's leading
@@ -865,13 +939,26 @@ class KorJpnImeService :
 
     private fun handleBackspace(ic: InputConnection) {
         batched(ic) {
-            if (!composer.empty()) {
-                composer.undoLastJamo()
-                // Empty preedit clears the composing region; non-empty replaces it.
-                ic.setComposingText(composer.preedit(), 1)
-            } else {
-                ic.deleteSurroundingText(1, 0)
-                onCharsDeleted(1)
+            when {
+                !composer.empty() -> {
+                    composer.undoLastJamo()
+                    // Composing region = accumulated kana + new (possibly
+                    // empty) preedit.  Empty composing region clears the
+                    // underline; non-empty replaces it.
+                    ic.setComposingText(currentKanaRun + composer.preedit(), 1)
+                }
+                currentKanaRun.isNotEmpty() -> {
+                    // No jamo in flight; pull the last char off the kana
+                    // run (the composing region) instead of deleting from
+                    // committed text.  Keeps backspace into the conversion
+                    // target visible — finishComposingText drops the empty
+                    // region when the run is fully consumed.
+                    currentKanaRun = currentKanaRun.dropLast(1)
+                    if (currentKanaRun.isEmpty()) ic.finishComposingText()
+                    else ic.setComposingText(currentKanaRun, 1)
+                    refreshCandidates()
+                }
+                else -> ic.deleteSurroundingText(1, 0)
             }
         }
     }
