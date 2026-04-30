@@ -310,25 +310,65 @@ private fun CjLetters(
                             tokens, shape, fn = true,
                             onClick = { onAction(KeyAction.Enter) },
                         ) { EnterIcon(color = tokens.inkSoft) }
-                        CjCell.Space -> SpaceKey(
-                            tokens = tokens, shape = shape, weight = 1f,
-                            label = spaceLabelFor(inputLanguage),
-                            onClick = { onAction(KeyAction.Space) },
-                        )
-                        CjCell.SymbolLangSplit -> SplitNavKey(
-                            tokens = tokens, shape = shape, gap = gap,
-                            // Letters page: left = enter numeric / symbol mode,
-                            // right = language cycle (한 → 영 → 일 → 한).
-                            // Long-press on right half opens the system IME
-                            // picker (escape hatch since Globe is gone).  Label
-                            // mirrors Beolsik's "!#1" symbol-page key for
-                            // consistency across the two layouts.
-                            leftLabel = "!#1",
-                            onLeftClick = onShowNumeric,
-                            rightLabel = langCycleLabelFor(inputLanguage),
-                            onRightClick = onLanguageCycle,
-                            onRightLongPress = { onAction(KeyAction.SwitchIme) },
-                        )
+                        CjCell.Space -> {
+                            // Japanese mode splits the space slot 1/3 ▶ +
+                            // 2/3 space (▶ for cursor / future bunsetsu
+                            // extend).  Korean mode keeps the full-width
+                            // space — the user said "한국어일 때는 필요
+                            // 없어 일본어일 때만 있으면 된다".
+                            if (inputLanguage == InputLanguage.JAPANESE) {
+                                Row(
+                                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                                    horizontalArrangement = Arrangement.spacedBy(gap.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Key(tokens, shape, fn = true, label = "▶",
+                                        onClick = { onAction(KeyAction.CursorRight) })
+                                    SpaceKey(tokens = tokens, shape = shape, weight = 2f,
+                                        label = spaceLabelFor(inputLanguage),
+                                        onClick = { onAction(KeyAction.Space) })
+                                }
+                            } else {
+                                SpaceKey(
+                                    tokens = tokens, shape = shape, weight = 1f,
+                                    label = spaceLabelFor(inputLanguage),
+                                    onClick = { onAction(KeyAction.Space) },
+                                )
+                            }
+                        }
+                        CjCell.SymbolLangSplit -> {
+                            // Japanese mode: 3-way !#1 | lang | ◀ (◀ for
+                            // cursor / future bunsetsu shrink).  Korean
+                            // mode: 2-way !#1 | lang only (no ◀ — same
+                            // reasoning as the ▶ case above).
+                            if (inputLanguage == InputLanguage.JAPANESE) {
+                                Row(
+                                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                                    horizontalArrangement = Arrangement.spacedBy(gap.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Key(tokens, shape, fn = true, label = "!#1",
+                                        onClick = { onShowNumeric() })
+                                    Key(
+                                        tokens, shape, fn = true,
+                                        label = langCycleLabelFor(inputLanguage),
+                                        onClick = onLanguageCycle,
+                                        onLongPress = { onAction(KeyAction.SwitchIme) },
+                                    )
+                                    Key(tokens, shape, fn = true, label = "◀",
+                                        onClick = { onAction(KeyAction.CursorLeft) })
+                                }
+                            } else {
+                                SplitNavKey(
+                                    tokens = tokens, shape = shape, gap = gap,
+                                    leftLabel = "!#1",
+                                    onLeftClick = onShowNumeric,
+                                    rightLabel = langCycleLabelFor(inputLanguage),
+                                    onRightClick = onLanguageCycle,
+                                    onRightLongPress = { onAction(KeyAction.SwitchIme) },
+                                )
+                            }
+                        }
                         CjCell.Hanja -> {
                             // Same physical slot, language-aware semantics:
                             //   - KOR: "한자" → single-syllable Hangul→Hanja
