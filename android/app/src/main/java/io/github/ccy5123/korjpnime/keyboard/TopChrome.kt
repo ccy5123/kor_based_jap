@@ -33,43 +33,6 @@ import io.github.ccy5123.korjpnime.theme.InputLanguage
 import io.github.ccy5123.korjpnime.theme.KeyboardTokens
 
 /**
- * Top chrome bar above the candidate strip — language badge on the left,
- * a single ⋯ menu icon on the right.  The menu consolidates every chrome-
- * level action (emoji / clipboard / voice / system IME settings / our
- * own keyboard settings) so the strip itself stays uncluttered and the
- * 30 dp row earns its keep instead of just hosting a gear icon.
- *
- * v1 menu wiring:
- *   - 키보드 설정      → onSettingsClick (existing Settings activity)
- *   - 시스템 IME 설정  → onSystemImeSettings (Android Languages & input)
- *   - 이모지 / 클립보드 / 음성 입력 → "준비 중" toast (TODO follow-up)
- */
-@Composable
-fun TopChrome(
-    tokens: KeyboardTokens,
-    inputLanguage: InputLanguage = InputLanguage.JAPANESE,
-    onSettingsClick: (() -> Unit)? = null,
-    onSystemImeSettings: (() -> Unit)? = null,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(30.dp)
-            .background(tokens.strip)
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        LanguageBadge(tokens = tokens, inputLanguage = inputLanguage)
-        Box(modifier = Modifier.weight(1f).height(1.dp))
-        UtilityMenu(
-            tokens = tokens,
-            onSettingsClick = onSettingsClick,
-            onSystemImeSettings = onSystemImeSettings,
-        )
-    }
-}
-
-/**
  * Top-chrome badge that surfaces the current [InputLanguage] as a flag
  * emoji + native-script label.  Provides a glanceable cue in the chrome
  * bar that mirrors the SpaceKey label, so users who occasionally
@@ -85,7 +48,7 @@ fun TopChrome(
  * and the dark-mode variant without redefining per-direction tokens.
  */
 @Composable
-private fun LanguageBadge(tokens: KeyboardTokens, inputLanguage: InputLanguage) {
+internal fun LanguageBadge(tokens: KeyboardTokens, inputLanguage: InputLanguage) {
     val (flag, label, tint) = when (inputLanguage) {
         InputLanguage.KOREAN -> Triple("🇰🇷", "한국어", Color(0xFF1E5AFF))
         InputLanguage.ENGLISH -> Triple("🇺🇸", "English", Color(0xFFB8862E))
@@ -120,7 +83,7 @@ private fun LanguageBadge(tokens: KeyboardTokens, inputLanguage: InputLanguage) 
  * and follow-up work can wire each entry without further UI plumbing.
  */
 @Composable
-private fun UtilityMenu(
+internal fun UtilityMenu(
     tokens: KeyboardTokens,
     onSettingsClick: (() -> Unit)?,
     onSystemImeSettings: (() -> Unit)?,

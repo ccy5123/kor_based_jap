@@ -26,9 +26,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ccy5123.korjpnime.theme.InputLanguage
 import io.github.ccy5123.korjpnime.theme.KeyboardTokens
 import io.github.ccy5123.korjpnime.theme.StripTreatment
 
+/**
+ * Merged top-row strip: language badge on the left, candidates
+ * (horizontally scrollable) in the middle, expand button + ⋯ menu
+ * on the right.  Replaces the old separate TopChrome bar — the
+ * combined row is 40 dp tall, 30 dp shorter than the previous chrome
+ * + strip stack.  The lang badge and menu remain visible regardless
+ * of whether any candidates are present (always-on chrome anchors).
+ */
 @Composable
 fun CandidateStrip(
     tokens: KeyboardTokens,
@@ -36,10 +45,13 @@ fun CandidateStrip(
     candidates: List<String> = emptyList(),
     onPick: (String) -> Unit = {},
     onExpand: (() -> Unit)? = null,
+    inputLanguage: InputLanguage = InputLanguage.JAPANESE,
+    onSettingsClick: (() -> Unit)? = null,
+    onSystemImeSettings: (() -> Unit)? = null,
 ) {
     val baseModifier = Modifier
         .fillMaxWidth()
-        .height(36.dp)
+        .height(40.dp)
         .background(tokens.strip)
 
     val withBorder = if (treatment == StripTreatment.HAIRLINE) {
@@ -57,11 +69,16 @@ fun CandidateStrip(
         modifier = withBorder,
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Left: language badge (always visible).
+        Box(modifier = Modifier.padding(start = 10.dp, end = 8.dp)) {
+            LanguageBadge(tokens = tokens, inputLanguage = inputLanguage)
+        }
+        // Middle: scrollable candidates.
         Row(
             modifier = Modifier
                 .weight(1f)
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 10.dp),
+                .padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = if (treatment == StripTreatment.CHIP)
                 Arrangement.spacedBy(6.dp) else Arrangement.Start,
@@ -87,10 +104,11 @@ fun CandidateStrip(
                 }
             }
         }
+        // Right: expand-strip chevron (when there's overflow) + ⋯ utility menu.
         if (candidates.isNotEmpty() && onExpand != null) {
             Box(
                 modifier = Modifier
-                    .padding(end = 8.dp)
+                    .padding(end = 6.dp)
                     .clip(RoundedCornerShape(999.dp))
                     .background(tokens.keyAlt)
                     .clickable(onClick = onExpand)
@@ -104,6 +122,13 @@ fun CandidateStrip(
                     color = tokens.inkSoft,
                 )
             }
+        }
+        Box(modifier = Modifier.padding(end = 8.dp)) {
+            UtilityMenu(
+                tokens = tokens,
+                onSettingsClick = onSettingsClick,
+                onSystemImeSettings = onSystemImeSettings,
+            )
         }
     }
 }

@@ -56,12 +56,10 @@ fun KeyboardSurface(
             .height(heightDp.dp)
             .background(tokens.sheet),
     ) {
-        TopChrome(
-            tokens = tokens,
-            inputLanguage = inputLanguage,
-            onSettingsClick = onSettingsClick,
-            onSystemImeSettings = onSystemImeSettings,
-        )
+        // Top chrome (lang badge + ⋯ menu) is now merged into the
+        // candidate strip row — saves 30 dp of vertical space and gives
+        // the always-on chrome anchors a single home alongside the
+        // per-tap candidates.
         CandidateStrip(
             tokens = tokens,
             treatment = direction.strip,
@@ -70,6 +68,9 @@ fun KeyboardSurface(
             onExpand = if (candidates.isNotEmpty()) {
                 { expanded = !expanded }
             } else null,
+            inputLanguage = inputLanguage,
+            onSettingsClick = onSettingsClick,
+            onSystemImeSettings = onSystemImeSettings,
         )
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             // ENGLISH mode always renders QWERTY regardless of the user's
