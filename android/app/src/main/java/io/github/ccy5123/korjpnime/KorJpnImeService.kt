@@ -51,6 +51,7 @@ import io.github.ccy5123.korjpnime.theme.KeyboardMode
 import io.github.ccy5123.korjpnime.theme.ThemeMode
 import io.github.ccy5123.korjpnime.ui.SettingsActivity
 import io.github.ccy5123.korjpnime.voice.VoiceInputActivity
+import java.text.BreakIterator
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -358,6 +359,7 @@ class KorJpnImeService :
                         emojiCategories = emojiData.categories(),
                         emojiRecents = emojiRecentList,
                         onEmojiPick = ::handleEmojiPick,
+                        emojiVariantsOf = emojiData::variantsOf,
                     )
                 }
             }
@@ -433,7 +435,20 @@ class KorJpnImeService :
     }
 
     /** True if every char in [s] is hiragana (U+3040..U+309F). */
-    private fun isAllHiragana(s: String): Boolean = s.isNotEmpty() && s.all { it.code in 0x3040..0x309F }
+    /**
+     * True when [s] is one or more chars that should join the live kana
+     * conversion run.  Strict hiragana (U+3040..U+309F) PLUS the
+     * katakana-hiragana prolonged sound mark `ー` (U+30FC) — `ー` is the
+     * standard long-vowel mark for loanwords / katakana-flavoured
+     * spellings (コーヒー / ホール / etc.) and the user's spec is that
+     * long-pressing the punct key during a kana run should EXTEND the
+     * underline, not finalise it (without this guard, the run committed
+     * + ー committed separately on every long-press → "코 변환하고 장음,
+     * 히 변환하고 장음 이렇게 바꿔야하는 것은 불편해").
+     */
+    private fun isAllHiragana(s: String): Boolean = s.isNotEmpty() && s.all {
+        it.code in 0x3040..0x309F || it.code == 0x30FC
+    }
 
     /** Update [currentKanaRun] after [count] chars deleted from the editor. */
     private fun onCharsDeleted(count: Int) {
@@ -1069,10 +1084,24 @@ class KorJpnImeService :
      */
     private fun handleCjVowel(ic: InputConnection, stroke: Char) {
         if (stroke == CheonjiinComposer.STROKE_DOT) {
+            // Existing silent-ㅇ + 오/와/에 + ㆍ → を / は / へ particle markers.
             val triggerJamo = particleMarkerTrigger()
             if (triggerJamo != null) {
                 cheonjiin.reset()
                 handleCjOps(ic, listOf(CheonjiinComposer.Op.Emit(triggerJamo)))
+                return
+            }
+            // Long-お shortcut (JP only): for any non-silent cho with jung
+            // ㅗ, ㆍ flushes the syllable as kana then appends う — the
+            // long-o pattern (こう / そう / もう / etc.) that's frequent
+            // in Japanese.  Silent ㅇ + ㅗ + ㆍ stays as the を particle
+            // path above per the user's "を 입력방식 그대로 유지" call.
+            if (longOuShortcutTriggers()) {
+                cheonjiin.reset()
+                batched(ic) {
+                    flushComposerInner(ic)
+                    emit(ic, "う")
+                }
                 return
             }
         }
@@ -1080,6 +1109,21 @@ class KorJpnImeService :
             ic,
             cheonjiin.tapVowel(stroke, System.currentTimeMillis(), composer.currentRawJung()),
         )
+    }
+
+    /**
+     * True when [handleCjVowel] should treat ㆍ as "commit the current
+     * Cho+ㅗ syllable as kana and append う" — the long-お shortcut.
+     * Restricted to JP mode (KOR/ENG modes don't produce kana, so a kana
+     * "う" suffix wouldn't make sense) and to non-silent cho (silent ㅇ +
+     * ㅗ + ㆍ is the kWoMarker → を path that runs above).
+     */
+    private fun longOuShortcutTriggers(): Boolean {
+        if (inputLanguage != InputLanguage.JAPANESE) return false
+        if (!composer.isOpenChoJung()) return false
+        if (composer.currentRawJung() != 'ㅗ') return false
+        if (composer.currentChoJamo() == 'ㅇ') return false
+        return true
     }
 
     /**
@@ -1255,6 +1299,28 @@ class KorJpnImeService :
     }
 
     /**
+     * Number of UTF-16 code units in the last grapheme cluster of the
+     * editor's text-before-cursor.  [BreakIterator.getCharacterInstance]
+     * follows UAX #29, so emoji modifier sequences (✋🏿), ZWJ sequences
+     * (👨‍💼), variation selectors (☺️), and standard Hangul / Latin chars
+     * all return their proper cluster width.  Falls back to 1 on parse
+     * failure or empty buffer.
+     */
+    private fun lastGraphemeUtf16Length(ic: InputConnection): Int {
+        // 16 chars is plenty for any single grapheme cluster (longest known
+        // cluster is the family-of-four ZWJ sequence at 11 UTF-16 units).
+        val sample = ic.getTextBeforeCursor(16, 0)?.toString() ?: return 1
+        if (sample.isEmpty()) return 1
+        val it = BreakIterator.getCharacterInstance()
+        it.setText(sample)
+        val end = sample.length
+        val prev = it.preceding(end)
+        if (prev == BreakIterator.DONE || prev < 0) return 1
+        val len = end - prev
+        return if (len > 0) len else 1
+    }
+
+    /**
      * Move the editor caret one step in the requested direction.  Uses the
      * standard DPAD key event which every editor honours; setSelection would
      * also work but requires querying current selection first.
@@ -1381,9 +1447,20 @@ class KorJpnImeService :
                     refreshCandidates()
                 }
                 else -> {
-                    ic.deleteSurroundingText(1, 0)
+                    // Delete a whole grapheme cluster, not one UTF-16
+                    // code unit — emojis like ✋🏿 (skin-tone modifier),
+                    // 👨‍💼 (ZWJ sequence), and any other multi-codepoint
+                    // sequence would otherwise take 2-3 backspace taps
+                    // and surface orphan-surrogate ▢ glyphs in between.
+                    val n = lastGraphemeUtf16Length(ic)
+                    ic.deleteSurroundingText(n, 0)
                     // KOR / ENG autocomplete: shrink the prefix in lockstep
                     // with the editor so suggestions update on backspace.
+                    // Korean Hangul + ASCII letters are always 1 UTF-16
+                    // unit per char, so this still pops a single prefix
+                    // char even when n > 1 (emoji backspace, prefix is
+                    // already empty since emojis reset it via
+                    // updateWordPrefix's length > 1 branch).
                     if (currentWordPrefix.isNotEmpty()) {
                         currentWordPrefix = currentWordPrefix.dropLast(1)
                         refreshCandidates()

@@ -2,6 +2,7 @@ package io.github.ccy5123.korjpnime.keyboard
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,11 +26,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -56,18 +60,22 @@ fun EmojiPanel(
     recents: List<String>,
     onPick: (String) -> Unit,
     onClose: () -> Unit,
+    variantsOf: (String) -> List<String> = { emptyList() },
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
+    // Long-press popover state: (base emoji, [base + skin variants]).
+    // Null when no popover is showing.
+    var variantPopover by remember { mutableStateOf<Pair<String, List<String>>?>(null) }
 
     // Tab 0 is always "최근" (dynamic), tab 1+ are the static categories.
     val tabLabels = listOf("🕘 최근") + categories.map { categoryLabel(it.name) }
     val visibleEmojis = if (selectedTab == 0) recents
                         else categories.getOrNull(selectedTab - 1)?.emojis ?: emptyList()
 
+    Box(modifier = Modifier.fillMaxSize().background(tokens.sheet)) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(tokens.sheet)
             .padding(8.dp),
     ) {
         // Header: category tabs (scrollable) + close button.
@@ -142,28 +150,117 @@ fun EmojiPanel(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 items(visibleEmojis) { emoji ->
-                    EmojiCell(emoji, tokens, onClick = { onPick(emoji) })
+                    val variants = variantsOf(emoji)
+                    EmojiCell(
+                        emoji = emoji,
+                        hasVariants = variants.isNotEmpty(),
+                        tokens = tokens,
+                        onClick = { onPick(emoji) },
+                        onLongPress = {
+                            if (variants.isNotEmpty()) {
+                                variantPopover = emoji to (listOf(emoji) + variants)
+                            }
+                        },
+                    )
                 }
             }
         }
     }
+    // Long-press skin tone popover overlay — translucent backdrop
+    // dismisses on tap; the variant strip in the centre lets the user
+    // pick a tone without leaving the panel.
+    variantPopover?.let { (_, variants) ->
+        VariantPopover(
+            variants = variants,
+            tokens = tokens,
+            onPick = {
+                onPick(it)
+                variantPopover = null
+            },
+            onDismiss = { variantPopover = null },
+        )
+    }
+    }  // outer Box
 }
 
 @Composable
 private fun EmojiCell(
     emoji: String,
+    hasVariants: Boolean,
     tokens: KeyboardTokens,
     onClick: () -> Unit,
+    onLongPress: () -> Unit,
 ) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(38.dp)
             .clip(RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick),
+            .pointerInput(emoji) {
+                detectTapGestures(
+                    onTap = { onClick() },
+                    onLongPress = { onLongPress() },
+                )
+            },
         contentAlignment = Alignment.Center,
     ) {
         Text(text = emoji, fontSize = 22.sp)
+        // Tiny corner dot signals "long-press for skin-tone variants".
+        if (hasVariants) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(2.dp)
+                    .size(4.dp)
+                    .clip(CircleShape)
+                    .background(tokens.inkSoft.copy(alpha = 0.5f)),
+            )
+        }
+    }
+}
+
+/**
+ * Long-press popover showing skin-tone variants of a base emoji.
+ * Translucent backdrop dismisses on tap; the variant strip in the
+ * centre is opaque + clipped to a card.  [variants] is the full list
+ * (base first, then 5 skin tones) so the user can also re-pick the
+ * base without losing the popover.
+ */
+@Composable
+private fun VariantPopover(
+    variants: List<String>,
+    tokens: KeyboardTokens,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.32f))
+            .clickable(onClick = onDismiss),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(tokens.sheet)
+                .padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            variants.forEach { v ->
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(tokens.keyAlt)
+                        .clickable { onPick(v) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(text = v, fontSize = 26.sp)
+                }
+            }
+        }
     }
 }
 

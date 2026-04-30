@@ -298,10 +298,22 @@ private fun CjLetters(
                                 },
                             )
                         }
-                        is CjCell.Punct -> Key(
-                            tokens, shape, fn = true, label = cell.display,
-                            onClick = { onAction(KeyAction.CjPunct(cell.cycle)) },
-                        )
+                        is CjCell.Punct -> {
+                            // Long-press on the JP punct cell → katakana
+                            // chouonpu (ー), the long-vowel mark used for
+                            // foreign words (コーヒー / ニュース / etc.).
+                            // Cornered "ー" indicator mirrors the
+                            // long-press digit hint on the consonant cells.
+                            val isJp = inputLanguage == InputLanguage.JAPANESE
+                            Key(
+                                tokens, shape, fn = true, label = cell.display,
+                                cornerHint = if (isJp) "ー" else null,
+                                onClick = { onAction(KeyAction.CjPunct(cell.cycle)) },
+                                onLongPress = if (isJp) {
+                                    { onAction(KeyAction.Commit("ー")) }
+                                } else null,
+                            )
+                        }
                         CjCell.Backspace -> BackspaceKey(
                             tokens = tokens, shape = shape, weight = 1f,
                             onTriggerBackspace = { onAction(KeyAction.Backspace) },

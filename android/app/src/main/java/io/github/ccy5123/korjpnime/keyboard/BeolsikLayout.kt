@@ -246,14 +246,28 @@ private fun BeolsikLetters(
                 onLongPress = { dispatch(KeyAction.SwitchIme) },
             )
             // Korean / English use ASCII , .  ; Japanese uses 、 。 .
+            // Both punct keys also long-press → ー (katakana chouonpu)
+            // in JP mode, with a corner "ー" hint per the user's
+            // "두벌식에서는 , 혹은 . 이곳을 누르고 있으면 (장음) 나오게"
+            // request.  KOR / ENG modes don't surface the hint or the
+            // long-press since the kana long-vowel mark isn't relevant.
             val (left, right) = letterPunctFor(inputLanguage)
+            val isJp = inputLanguage == InputLanguage.JAPANESE
+            val chouonHint = if (isJp) "ー" else null
+            val chouonLongPress: (() -> Unit)? = if (isJp) {
+                { dispatch(KeyAction.Commit("ー")) }
+            } else null
             Key(tokens, shape, weight = 0.7f, fn = true, label = left,
-                onClick = { dispatch(KeyAction.Commit(left)) })
+                cornerHint = chouonHint,
+                onClick = { dispatch(KeyAction.Commit(left)) },
+                onLongPress = chouonLongPress)
             SpaceKey(tokens = tokens, shape = shape, weight = 3.5f,
                 label = spaceLabelFor(inputLanguage),
                 onClick = { dispatch(KeyAction.Space) })
             Key(tokens, shape, weight = 0.7f, fn = true, label = right,
-                onClick = { dispatch(KeyAction.Commit(right)) })
+                cornerHint = chouonHint,
+                onClick = { dispatch(KeyAction.Commit(right)) },
+                onLongPress = chouonLongPress)
             Key(tokens, shape, weight = 1.3f, accent = true,
                 onClick = { dispatch(KeyAction.Enter) }) {
                 EnterIcon(color = tokens.onAccent)
@@ -336,8 +350,12 @@ private fun BeolsikSymbols(
                     label = langCycleLabelFor(inputLanguage),
                     onClick = onLanguageCycle,
                     onLongPress = { onAction(KeyAction.SwitchIme) })
+                // Same long-press → ー as the letters page punct keys, so
+                // muscle memory transfers between letters and symbol pages.
                 Key(tokens, shape, weight = 0.7f, fn = true, label = "，",
-                    onClick = { onAction(KeyAction.Commit("，")) })
+                    cornerHint = "ー",
+                    onClick = { onAction(KeyAction.Commit("，")) },
+                    onLongPress = { onAction(KeyAction.Commit("ー")) })
                 Key(tokens, shape, weight = 0.7f, fn = true, label = "←",
                     onClick = { onAction(KeyAction.CursorLeft) })
                 SpaceKey(tokens = tokens, shape = shape, weight = 2.4f,
@@ -346,7 +364,9 @@ private fun BeolsikSymbols(
                 Key(tokens, shape, weight = 0.7f, fn = true, label = "→",
                     onClick = { onAction(KeyAction.CursorRight) })
                 Key(tokens, shape, weight = 0.7f, fn = true, label = "．",
-                    onClick = { onAction(KeyAction.Commit("．")) })
+                    cornerHint = "ー",
+                    onClick = { onAction(KeyAction.Commit("．")) },
+                    onLongPress = { onAction(KeyAction.Commit("ー")) })
                 Key(tokens, shape, weight = 1.2f, accent = true,
                     onClick = { onAction(KeyAction.Enter) }) {
                     EnterIcon(color = tokens.onAccent)

@@ -51,6 +51,7 @@ fun KeyboardSurface(
     emojiCategories: List<io.github.ccy5123.korjpnime.engine.EmojiData.Category> = emptyList(),
     emojiRecents: List<String> = emptyList(),
     onEmojiPick: (String) -> Unit = {},
+    emojiVariantsOf: (String) -> List<String> = { emptyList() },
 ) {
     val tokens = resolveTokens(direction, dark, LocalContext.current)
     var expanded by remember { mutableStateOf(false) }
@@ -133,6 +134,7 @@ fun KeyboardSurface(
                     recents = emojiRecents,
                     onPick = onEmojiPick,
                     onClose = { showEmoji = false },
+                    variantsOf = emojiVariantsOf,
                 )
             }
         }
