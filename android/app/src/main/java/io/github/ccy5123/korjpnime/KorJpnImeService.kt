@@ -386,14 +386,34 @@ class KorJpnImeService :
         super.onUpdateSelection(
             oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd,
         )
-        // If we still hold composer state but the editor reports no active
-        // composing region (candidatesStart == -1), the field was reset
-        // externally — KakaoTalk clears the EditText after its own send button
-        // fires, the user tapped a different EditText, the app called
-        // setText(""), etc.  Drop our state so the next jamo doesn't hand off
-        // its leftover (cho, jung, jong) into a fresh context (the bug that
-        // produced "요감사합니다").
-        if (!composer.empty() && candidatesStart < 0) {
+        if (composer.empty()) return
+
+        // Case 1: composing region is gone entirely (external clear).
+        // KakaoTalk clears the EditText after its own send button fires, the
+        // user tapped a different EditText, the app called setText(""), etc.
+        // Drop our state so the next jamo doesn't hand off its leftover (cho,
+        // jung, jong) into a fresh context (the bug that produced "요감사합니다").
+        if (candidatesStart < 0) {
+            resetAllState()
+            return
+        }
+
+        // Case 2: composing region exists but the cursor moved OUTSIDE it.
+        // This happens when the user taps elsewhere in the field mid-syllable
+        // (e.g. dragging the caret to insert text earlier in the sentence).
+        // Without this branch, the next keystroke would call setComposingText
+        // against the OLD region, replacing the underlined preedit instead of
+        // inserting at the new cursor position — the bug the user reported.
+        //
+        // Fix: finalize the existing composing region IN PLACE (commits the
+        // underlined preedit as committed text where it sits), then drop our
+        // composer so the next keystroke starts a fresh region at the new
+        // cursor position.
+        val cursorOutsideRegion =
+            newSelStart < candidatesStart || newSelStart > candidatesEnd ||
+            newSelEnd < candidatesStart || newSelEnd > candidatesEnd
+        if (cursorOutsideRegion) {
+            currentInputConnection?.finishComposingText()
             resetAllState()
         }
     }
@@ -441,25 +461,24 @@ class KorJpnImeService :
     }
 
     /**
-     * Space behaviour, layered (each takes precedence over the next):
+     * Space behaviour, two-tap convention (matches standard Japanese IMEs +
+     * the user's "안 + space space → 안 [space]" expectation):
      *
-     *  1. Cheonjiin mid-consonant-cycle (e.g., user just tapped ㄴ for 안's
-     *     jong and may tap ㄴ again for 녕's cho): break the cycle window,
-     *     no editor change.  Lets `안녕` be typed without an intervening
-     *     literal space.
-     *  2. Hangul composer non-empty (preedit shown): flush only — commit the
-     *     pending kana (e.g., 루 → る) without inserting a literal space.
-     *     Mirrors standard Japanese IME convention where Space converts /
-     *     finalises the in-progress reading and the user picks a candidate
-     *     next.  Tapping Space again (now with composer empty) inserts the
-     *     literal space.
-     *  3. Both empty: literal space.
+     *  - Tap 1 with non-empty state: break any open Cheonjiin consonant
+     *    cycle AND flush the composer's pending syllable in one go.  No
+     *    literal space yet — same convention as Japanese IMEs where space
+     *    finalises the in-progress reading first.
+     *  - Tap 2 (now empty): literal space inserted.
+     *
+     *  `안녕` still types as one word: the tap-1 cycle break + flush commits
+     *  안 with no space; the next ㄴ starts a fresh syllable for 녕.
+     *
+     *  Earlier this routine kept cycle-break and composer-flush as separate
+     *  branches, requiring three space taps (cycle break → flush → space)
+     *  after a 종성-bearing syllable.  Merging them gives the user the
+     *  expected two-tap behaviour.
      */
     private fun handleSpace(ic: InputConnection) {
-        if (cheonjiin.isInConsonantCycle()) {
-            cheonjiin.reset()
-            return
-        }
         cheonjiin.reset()
         if (!composer.empty()) {
             batched(ic) { flushComposerInner(ic) }
