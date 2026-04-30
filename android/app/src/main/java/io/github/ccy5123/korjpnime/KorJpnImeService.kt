@@ -4,6 +4,9 @@ import android.content.Intent
 import android.provider.Settings
 import android.inputmethodservice.InputMethodService
 import android.os.Build
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.BackgroundColorSpan
 import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.View
@@ -134,6 +137,19 @@ class KorJpnImeService :
      * so the user can swap to a different kanji for the same reading.
      */
     private var lastKanaPick: Pair<String, String>? = null
+
+    /**
+     * Right boundary of the active "conversion window" within
+     * [currentKanaRun].  When `-1` (default), the strip looks up candidates
+     * for the FULL kana run — the original whole-string conversion path.
+     * When `>= 0`, the user has tapped ◀ / ▶ to manually adjust the
+     * window: the strip looks up `currentKanaRun[0..conversionBoundary)`
+     * and a candidate pick replaces only that slice (any remaining kana
+     * stays as a fresh composing region for follow-up conversion).  Reset
+     * to `-1` whenever new kana is appended (the user's just-typed char
+     * invalidates the previous boundary).
+     */
+    private var conversionBoundary: Int = -1
 
     /**
      * M3 Viterbi engine — RichDictionary + Connector mmap'd from
@@ -284,12 +300,17 @@ class KorJpnImeService :
         if (text.isEmpty()) return
         if (isAllHiragana(text)) {
             currentKanaRun += text
-            ic.setComposingText(currentKanaRun, 1)
+            // New kana invalidates any prior boundary the user set via
+            // ◀ / ▶ — they tapped through to land on the previous run's
+            // shape, not this longer one.
+            conversionBoundary = -1
+            ic.setComposingText(composingSpannable(), 1)
         } else {
             if (currentKanaRun.isNotEmpty()) {
                 ic.finishComposingText()
                 currentKanaRun = ""
             }
+            conversionBoundary = -1
             ic.commitText(text, 1)
         }
         refreshCandidates()
@@ -310,16 +331,21 @@ class KorJpnImeService :
             _candidates.value = emptyList()
             return
         }
+        // Active conversion window — full run when conversionBoundary < 0
+        // (the user hasn't tapped ◀ / ▶), otherwise the user's chosen
+        // prefix.  Lookups ALL run against this slice so the strip
+        // matches what the next pick will replace.
+        val effective = effectiveConversionWindow()
         val combined = LinkedHashSet<String>()
         // 1. User pick history (most-recent-first).
-        combined.addAll(userDict.getUserCandidates(currentKanaRun))
+        combined.addAll(userDict.getUserCandidates(effective))
         // 2. Viterbi top-K segmented kanji conversions — the M3 engine.
         //    Surfaces best-cost segmentations like わたしの → 私の that the
         //    simple dict can't produce because it requires an exact-key
         //    match.  Skipped when richDict / connector haven't finished
         //    loading yet; the simple dict below still fires.
         if (viterbi.isReady) {
-            val topK = viterbi.searchTopK(currentKanaRun, VITERBI_TOP_K)
+            val topK = viterbi.searchTopK(effective, VITERBI_TOP_K)
             for (r in topK) combined.add(r.joinedSurface())
         }
         // 3. Static dictionary candidates (most-frequent-first), capped to
@@ -328,14 +354,41 @@ class KorJpnImeService :
         val cap = candidateCount
         if (dictionary.isLoaded) {
             val dictBudget = (cap - 2).coerceAtLeast(0)
-            combined.addAll(dictionary.lookup(currentKanaRun).take(dictBudget))
+            combined.addAll(dictionary.lookup(effective).take(dictBudget))
         }
         // 4. Auto-katakana fallback — guaranteed slot regardless of dict size.
-        val katakana = hiraganaToKatakana(currentKanaRun)
-        if (katakana != currentKanaRun) combined.add(katakana)
+        val katakana = hiraganaToKatakana(effective)
+        if (katakana != effective) combined.add(katakana)
         // 5. Raw hiragana stay-as-is.
-        combined.add(currentKanaRun)
+        combined.add(effective)
         _candidates.value = combined.toList().take(cap)
+    }
+
+    /** kana run slice that the strip / pick are currently operating on. */
+    private fun effectiveConversionWindow(): String =
+        if (conversionBoundary < 0) currentKanaRun
+        else currentKanaRun.substring(0, conversionBoundary.coerceIn(0, currentKanaRun.length))
+
+    /**
+     * Build the composing-region content for the editor: kana run +
+     * in-progress Hangul preedit, with a soft-gold background highlight on
+     * the active conversion window when [conversionBoundary] has been
+     * narrowed by ◀ / ▶.  When the window is the full run (boundary -1),
+     * returns plain text — the standard composing-region underline is
+     * enough on its own.
+     */
+    private fun composingSpannable(): CharSequence {
+        val full = currentKanaRun + composer.preedit()
+        if (full.isEmpty()) return ""
+        if (conversionBoundary < 0 || currentKanaRun.isEmpty()) return full
+        val spannable = SpannableString(full)
+        val end = conversionBoundary.coerceAtMost(currentKanaRun.length)
+        spannable.setSpan(
+            BackgroundColorSpan(BUNSETSU_HIGHLIGHT_COLOR),
+            0, end,
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+        )
+        return spannable
     }
 
     /** Hiragana (U+3041..U+3096) → Katakana (U+30A1..U+30F6) by +0x60 shift. */
@@ -377,21 +430,28 @@ class KorJpnImeService :
             return
         }
 
-        val pickedFromKana = currentKanaRun
-        if (pickedFromKana.isEmpty()) return
-        userDict.recordPick(pickedFromKana, picked)
-        // Composing region holds the kana run; commitText replaces the
-        // entire composing region with the picked kanji in a single op
-        // (no need for a separate deleteSurroundingText — composing region
-        // contents are NOT counted as surrounding text by Android's IC).
+        val window = effectiveConversionWindow()
+        if (window.isEmpty()) return
+        userDict.recordPick(window, picked)
+        // Composing region holds the entire kana run; pick replaces only
+        // the active window.  When the user adjusted the boundary via
+        // ◀ / ▶ there's a tail (currentKanaRun beyond the window) that
+        // should stay convertible — re-establish it as a fresh composing
+        // region after committing the picked text.
+        val tail = if (conversionBoundary < 0) ""
+                   else currentKanaRun.substring(window.length)
         batched(ic) {
             ic.commitText(picked, 1)
+            if (tail.isNotEmpty()) {
+                ic.setComposingText(tail, 1)
+            }
         }
         // Stash the (kana, picked) pair so the JP-mode 再変換 key can roll
         // back this commit and re-surface candidates.  Replaced on every
         // subsequent pick — only the IMMEDIATE last commit is reconvertible.
-        lastKanaPick = pickedFromKana to picked
-        currentKanaRun = ""
+        lastKanaPick = window to picked
+        currentKanaRun = tail
+        conversionBoundary = -1
         refreshCandidates()
     }
 
@@ -508,6 +568,7 @@ class KorJpnImeService :
         composer.reset()
         cheonjiin.reset()
         currentKanaRun = ""
+        conversionBoundary = -1
         refreshCandidates()
     }
 
@@ -600,8 +661,8 @@ class KorJpnImeService :
             KeyAction.Backspace -> handleBackspace(ic)
             KeyAction.Enter -> { batched(ic) { flushComposerInner(ic) }; handleEnter() }
             KeyAction.SwitchIme -> { batched(ic) { flushComposerInner(ic) }; switchIme() }
-            KeyAction.CursorLeft -> { finalizeForCursor(ic); sendCursor(ic, KeyEvent.KEYCODE_DPAD_LEFT) }
-            KeyAction.CursorRight -> { finalizeForCursor(ic); sendCursor(ic, KeyEvent.KEYCODE_DPAD_RIGHT) }
+            KeyAction.CursorLeft -> handleCursorOrShrink(ic)
+            KeyAction.CursorRight -> handleCursorOrExtend(ic)
             KeyAction.Hanja -> handleHanja(ic)
             KeyAction.Reconvert -> handleReconvert(ic)
             KeyAction.Shift -> Unit       // BeolsikLayout owns the Shift state; service receives the action only for haptic
@@ -783,7 +844,7 @@ class KorJpnImeService :
             }
             // Composing region = accumulated kana run + in-progress Hangul
             // preedit (same shape as handleCommit's jamo branch).
-            ic.setComposingText(currentKanaRun + composer.preedit(), 1)
+            ic.setComposingText(composingSpannable(), 1)
         }
     }
 
@@ -860,7 +921,7 @@ class KorJpnImeService :
                 // the in-progress Hangul preedit.  Both stay underlined so
                 // the user can see "what's been emitted as kana so far"
                 // alongside "the syllable I'm building right now".
-                ic.setComposingText(currentKanaRun + composer.preedit(), 1)
+                ic.setComposingText(composingSpannable(), 1)
             } else {
                 // Punctuation, digits, kana, anything non-jamo — flush
                 // in-progress syllable first so it commits BEFORE the new text.
@@ -915,6 +976,59 @@ class KorJpnImeService :
     }
 
     /**
+     * ◀ key.  In Japanese conversion mode (kana run live) shrinks the
+     * active conversion window by one char so the strip surfaces
+     * candidates for a shorter prefix.  Otherwise, falls through to
+     * plain cursor-left.  Same dual-mode shape as [handleCursorOrExtend].
+     */
+    private fun handleCursorOrShrink(ic: InputConnection) {
+        if (inputLanguage == InputLanguage.JAPANESE) {
+            // Tapping ◀ implies the user is done with whatever syllable
+            // they were composing — flush any pending Hangul preedit so
+            // its kana joins currentKanaRun BEFORE we shrink the boundary.
+            // Without this the last-typed syllable (still sitting in
+            // composer state, not yet emitted) wouldn't be part of the
+            // conversion window the user is now adjusting.
+            if (!composer.empty()) batched(ic) { flushComposerInner(ic) }
+            if (currentKanaRun.isNotEmpty()) {
+                val current = if (conversionBoundary < 0) currentKanaRun.length else conversionBoundary
+                val next = (current - 1).coerceAtLeast(1)
+                conversionBoundary = if (next == currentKanaRun.length) -1 else next
+                // Re-render the composing region with the new highlight range.
+                ic.setComposingText(composingSpannable(), 1)
+                refreshCandidates()
+                return
+            }
+        }
+        finalizeForCursor(ic)
+        sendCursor(ic, KeyEvent.KEYCODE_DPAD_LEFT)
+    }
+
+    /**
+     * ▶ key.  In Japanese conversion mode (kana run live) extends the
+     * active conversion window by one char (up to the full run length —
+     * extending past the end resets to "full run" / `-1`).  Otherwise,
+     * plain cursor-right.
+     */
+    private fun handleCursorOrExtend(ic: InputConnection) {
+        if (inputLanguage == InputLanguage.JAPANESE) {
+            // Mirror handleCursorOrShrink: ▶ also implies the syllable
+            // is done, so flush the pending preedit first.
+            if (!composer.empty()) batched(ic) { flushComposerInner(ic) }
+            if (currentKanaRun.isNotEmpty()) {
+                val current = if (conversionBoundary < 0) currentKanaRun.length else conversionBoundary
+                val next = (current + 1).coerceAtMost(currentKanaRun.length)
+                conversionBoundary = if (next == currentKanaRun.length) -1 else next
+                ic.setComposingText(composingSpannable(), 1)
+                refreshCandidates()
+                return
+            }
+        }
+        finalizeForCursor(ic)
+        sendCursor(ic, KeyEvent.KEYCODE_DPAD_RIGHT)
+    }
+
+    /**
      * Commit any in-progress preedit + kana run as committed text before a
      * cursor-move op.  Without this the user moves the caret while the
      * composing region is still anchored to the old position; the next
@@ -959,7 +1073,7 @@ class KorJpnImeService :
                     // Composing region = accumulated kana + new (possibly
                     // empty) preedit.  Empty composing region clears the
                     // underline; non-empty replaces it.
-                    ic.setComposingText(currentKanaRun + composer.preedit(), 1)
+                    ic.setComposingText(composingSpannable(), 1)
                 }
                 currentKanaRun.isNotEmpty() -> {
                     // No jamo in flight; pull the last char off the kana
@@ -968,8 +1082,11 @@ class KorJpnImeService :
                     // target visible — finishComposingText drops the empty
                     // region when the run is fully consumed.
                     currentKanaRun = currentKanaRun.dropLast(1)
+                    // Boundary follows the run — if backspace shrunk the
+                    // run past the chosen window, reset to "full run".
+                    if (conversionBoundary > currentKanaRun.length) conversionBoundary = -1
                     if (currentKanaRun.isEmpty()) ic.finishComposingText()
-                    else ic.setComposingText(currentKanaRun, 1)
+                    else ic.setComposingText(composingSpannable(), 1)
                     refreshCandidates()
                 }
                 else -> ic.deleteSurroundingText(1, 0)
@@ -1024,5 +1141,12 @@ class KorJpnImeService :
          * without crowding out the simple-dict + katakana fallbacks.
          */
         private const val VITERBI_TOP_K = 5
+
+        /**
+         * Soft-gold background tint for the active 文節 conversion window
+         * (the kana prefix the strip / next pick currently target).  35%
+         * alpha keeps it readable against both light and dark themes.
+         */
+        private const val BUNSETSU_HIGHLIGHT_COLOR = 0x55FFD700
     }
 }
