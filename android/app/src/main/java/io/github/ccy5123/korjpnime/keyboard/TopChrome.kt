@@ -1,5 +1,6 @@
 package io.github.ccy5123.korjpnime.keyboard
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -11,24 +12,44 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.ccy5123.korjpnime.theme.InputLanguage
 import io.github.ccy5123.korjpnime.theme.KeyboardTokens
 
-/** Top chrome bar above the candidate strip. */
+/**
+ * Top chrome bar above the candidate strip — language badge on the left,
+ * a single ⋯ menu icon on the right.  The menu consolidates every chrome-
+ * level action (emoji / clipboard / voice / system IME settings / our
+ * own keyboard settings) so the strip itself stays uncluttered and the
+ * 30 dp row earns its keep instead of just hosting a gear icon.
+ *
+ * v1 menu wiring:
+ *   - 키보드 설정      → onSettingsClick (existing Settings activity)
+ *   - 시스템 IME 설정  → onSystemImeSettings (Android Languages & input)
+ *   - 이모지 / 클립보드 / 음성 입력 → "준비 중" toast (TODO follow-up)
+ */
 @Composable
 fun TopChrome(
     tokens: KeyboardTokens,
     inputLanguage: InputLanguage = InputLanguage.JAPANESE,
     onSettingsClick: (() -> Unit)? = null,
+    onSystemImeSettings: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
@@ -37,23 +58,14 @@ fun TopChrome(
             .background(tokens.strip)
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // D1b: round dots stand in for emoji/sticker/mic/clip; swap for proper SVG icons later.
-        ChromeDot(tokens.inkSoft)
-        ChromeDot(tokens.inkSoft)
-        ChromeDot(tokens.inkSoft)
-        ChromeDot(tokens.inkSoft)
-        Box(modifier = Modifier.weight(1f).height(1.dp))
         LanguageBadge(tokens = tokens, inputLanguage = inputLanguage)
-        Box(
-            modifier = Modifier
-                .size(20.dp)
-                .let { if (onSettingsClick != null) it.clip(CircleShape).clickable(onClick = onSettingsClick) else it },
-            contentAlignment = Alignment.Center,
-        ) {
-            SettingsGearIcon(color = tokens.inkSoft)
-        }
+        Box(modifier = Modifier.weight(1f).height(1.dp))
+        UtilityMenu(
+            tokens = tokens,
+            onSettingsClick = onSettingsClick,
+            onSystemImeSettings = onSystemImeSettings,
+        )
     }
 }
 
@@ -101,12 +113,64 @@ private fun LanguageBadge(tokens: KeyboardTokens, inputLanguage: InputLanguage) 
     }
 }
 
+/**
+ * Single ⋯ icon → dropdown menu of every chrome-level action.  Stub
+ * entries (emoji / clipboard / voice) just toast "준비 중" for now —
+ * the visible-but-disabled affordance lets users know the slot exists
+ * and follow-up work can wire each entry without further UI plumbing.
+ */
 @Composable
-private fun ChromeDot(color: Color) {
-    Box(
-        modifier = Modifier
-            .size(13.dp)
-            .clip(CircleShape)
-            .background(color.copy(alpha = 0.5f)),
-    )
+private fun UtilityMenu(
+    tokens: KeyboardTokens,
+    onSettingsClick: (() -> Unit)?,
+    onSystemImeSettings: (() -> Unit)?,
+) {
+    val context = LocalContext.current
+    var open by remember { mutableStateOf(false) }
+    fun stub(label: String) {
+        Toast.makeText(context, "$label — 준비 중", Toast.LENGTH_SHORT).show()
+    }
+
+    Box {
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .clip(CircleShape)
+                .clickable { open = true },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "⋯",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = tokens.inkSoft,
+            )
+        }
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("🎨  이모지") },
+                onClick = { open = false; stub("이모지") },
+            )
+            DropdownMenuItem(
+                text = { Text("📋  클립보드") },
+                onClick = { open = false; stub("클립보드") },
+            )
+            DropdownMenuItem(
+                text = { Text("🎤  음성 입력") },
+                onClick = { open = false; stub("음성 입력") },
+            )
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text("🌐  시스템 키보드 설정") },
+                onClick = { open = false; onSystemImeSettings?.invoke() },
+            )
+            DropdownMenuItem(
+                text = { Text("⚙️  키보드 설정") },
+                onClick = { open = false; onSettingsClick?.invoke() },
+            )
+        }
+    }
 }

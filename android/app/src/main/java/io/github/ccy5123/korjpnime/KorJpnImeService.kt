@@ -1,6 +1,7 @@
 package io.github.ccy5123.korjpnime
 
 import android.content.Intent
+import android.provider.Settings
 import android.inputmethodservice.InputMethodService
 import android.os.Build
 import android.view.HapticFeedbackConstants
@@ -249,6 +250,7 @@ class KorJpnImeService :
                         onCandidatePick = ::handleCandidatePick,
                         onAction = ::handleAction,
                         onSettingsClick = ::openSettings,
+                        onSystemImeSettings = ::openSystemImeSettings,
                     )
                 }
             }
@@ -466,6 +468,18 @@ class KorJpnImeService :
 
     private fun openSettings() {
         val intent = Intent(this, SettingsActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(intent)
+    }
+
+    /**
+     * Open Android's system "Languages & input" page so users can switch
+     * IMEs / pick a different default keyboard without leaving our IME.
+     * Reachable via the ⋯ menu in [TopChrome].
+     */
+    private fun openSystemImeSettings() {
+        val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         startActivity(intent)

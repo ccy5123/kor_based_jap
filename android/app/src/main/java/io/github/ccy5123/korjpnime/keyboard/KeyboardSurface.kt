@@ -43,6 +43,7 @@ fun KeyboardSurface(
     onCandidatePick: (String) -> Unit = {},
     onAction: (KeyAction) -> Unit = {},
     onSettingsClick: (() -> Unit)? = null,
+    onSystemImeSettings: (() -> Unit)? = null,
 ) {
     val tokens = resolveTokens(direction, dark, LocalContext.current)
     var expanded by remember { mutableStateOf(false) }
@@ -55,7 +56,12 @@ fun KeyboardSurface(
             .height(heightDp.dp)
             .background(tokens.sheet),
     ) {
-        TopChrome(tokens = tokens, inputLanguage = inputLanguage, onSettingsClick = onSettingsClick)
+        TopChrome(
+            tokens = tokens,
+            inputLanguage = inputLanguage,
+            onSettingsClick = onSettingsClick,
+            onSystemImeSettings = onSystemImeSettings,
+        )
         CandidateStrip(
             tokens = tokens,
             treatment = direction.strip,
