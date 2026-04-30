@@ -2,7 +2,7 @@
 Third-party licenses for the bundled dictionary / Viterbi data
 ================================================================================
 
-KorJpnIme bundles four data files derived from open-source projects:
+KorJpnIme bundles six data files derived from open-source projects:
 
   - assets/jpn_dict.txt   — kana → kanji static dictionary (legacy lookup)
                             [Mozc / IPAdic / Okinawa]
@@ -12,11 +12,17 @@ KorJpnIme bundles four data files derived from open-source projects:
                             [Mozc / IPAdic / Okinawa]
   - assets/hanja_dict.txt — Hangul → Hanja syllable conversion table
                             [libhangul / Choe Hwanjin BSD-3-clause]
+  - assets/ko_words.txt   — Korean prefix-completion wordlist
+                            [hermitdave/FrequencyWords MIT]
+  - assets/en_words.txt   — English prefix-completion wordlist
+                            [hermitdave/FrequencyWords MIT]
 
-The first three derive from the same Mozc upstream; the fourth is filtered
-from libhangul's data/hanja/hanja.txt to single-Hangul → single-Hanja entries.
-This file MUST ship alongside the data per the IPAdic terms (and is good
-practice for the BSD-3-clause-licensed libhangul data too).
+The first three derive from the same Mozc upstream.  hanja_dict.txt is
+filtered from libhangul's data/hanja/hanja.txt to single-Hangul → single-
+Hanja entries.  ko_words.txt / en_words.txt are filtered from
+hermitdave/FrequencyWords' OpenSubtitles2016 50K-word lists to Hangul-only
+/ a-z-only entries.  This file MUST ship alongside the data per the IPAdic
+terms (and is good practice for the BSD-3 / MIT components too).
 
 Build pipeline:
     upstream Mozc src/data/dictionary_oss/dictionary00..09.txt  (~1.3 M rows)
@@ -181,3 +187,35 @@ INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
 CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
+
+================================================================================
+5. hermitdave/FrequencyWords — MIT
+================================================================================
+
+Source: https://github.com/hermitdave/FrequencyWords
+Files used: content/2016/{ko,en}/{ko,en}_50k.txt
+Filtered to Hangul-only (KOR) / a-z-only (ENG) entries with frequency
+counts, used as the prefix-completion wordlist for the candidate strip
+in Korean / English input modes.
+
+MIT License
+
+Copyright (c) 2016 Hermit Dave
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

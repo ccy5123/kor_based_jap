@@ -37,6 +37,7 @@ import io.github.ccy5123.korjpnime.engine.HanjaDictionary
 import io.github.ccy5123.korjpnime.engine.RichDictionary
 import io.github.ccy5123.korjpnime.engine.UserDict
 import io.github.ccy5123.korjpnime.engine.Viterbi
+import io.github.ccy5123.korjpnime.engine.WordlistDictionary
 import io.github.ccy5123.korjpnime.keyboard.KeyAction
 import io.github.ccy5123.korjpnime.keyboard.KeyboardSurface
 import io.github.ccy5123.korjpnime.keyboard.LocalHapticsEnabled
@@ -120,6 +121,23 @@ class KorJpnImeService :
      * 한자 key in Korean mode; results surface in the candidate strip.
      */
     private val hanjaDictionary = HanjaDictionary()
+
+    /**
+     * Per-language prefix-completion wordlists.  Loaded asynchronously
+     * from `assets/ko_words.txt` / `assets/en_words.txt` (FrequencyWords
+     * MIT, see THIRD_PARTY_LICENSES.txt).  Consulted only in KOR / ENG
+     * input modes — JP mode keeps its existing kanji candidate pipeline.
+     */
+    private val korWordlist = WordlistDictionary("ko_words.txt")
+    private val enWordlist = WordlistDictionary("en_words.txt")
+
+    /**
+     * Word currently being typed in KOR / ENG mode.  Grows by one char
+     * per [emit] of a Hangul syllable / ASCII letter; resets on space /
+     * punctuation / mode switch / cursor move.  Drives the autocomplete
+     * suggestions in the candidate strip.
+     */
+    private var currentWordPrefix: String = ""
 
     /**
      * Hangul syllable currently being offered for Hanja conversion.
@@ -218,6 +236,13 @@ class KorJpnImeService :
             hanjaDictionary.load(applicationContext)
         }
         lifecycleScope.launch {
+            // KOR / ENG prefix-completion wordlists — ~600 KB each, ~50 K
+            // entries.  Used by [refreshCandidates] in those modes.
+            korWordlist.load(applicationContext)
+            enWordlist.load(applicationContext)
+            refreshCandidates()  // in case prefix was already set pre-load
+        }
+        lifecycleScope.launch {
             // Viterbi data is bigger (~71 MB across two files) and gets
             // extracted to internal storage on first run, so first-launch
             // load is ~1–2 s.  Subsequent launches just mmap the cached
@@ -311,9 +336,34 @@ class KorJpnImeService :
                 currentKanaRun = ""
             }
             conversionBoundary = -1
+            updateWordPrefix(text)
             ic.commitText(text, 1)
         }
         refreshCandidates()
+    }
+
+    /**
+     * Track the in-progress word for KOR / ENG prefix-completion as
+     * committed text accumulates.  Each [emit] of a single Hangul syllable
+     * (KOR) or ASCII letter (ENG) extends [currentWordPrefix]; anything
+     * else (punct, space, multi-char emissions, JP mode) resets it.  The
+     * prefix is what [refreshCandidates] looks up against the wordlist.
+     */
+    private fun updateWordPrefix(text: String) {
+        val isKor = inputLanguage == InputLanguage.KOREAN
+        val isEng = inputLanguage == InputLanguage.ENGLISH
+        if (!isKor && !isEng) {
+            currentWordPrefix = ""
+            return
+        }
+        if (text.length == 1) {
+            val c = text[0]
+            val isWordChar = (isKor && c in '가'..'힣') ||
+                (isEng && c.isLetter())
+            currentWordPrefix = if (isWordChar) currentWordPrefix + c else ""
+        } else {
+            currentWordPrefix = ""
+        }
     }
 
     /** True if every char in [s] is hiragana (U+3040..U+309F). */
@@ -327,6 +377,11 @@ class KorJpnImeService :
     }
 
     private fun refreshCandidates() {
+        // KOR / ENG prefix-completion path — orthogonal to JP's kana run.
+        if (inputLanguage != InputLanguage.JAPANESE) {
+            _candidates.value = lookupWordPrefixCandidates()
+            return
+        }
         if (currentKanaRun.isEmpty()) {
             _candidates.value = emptyList()
             return
@@ -362,6 +417,34 @@ class KorJpnImeService :
         // 5. Raw hiragana stay-as-is.
         combined.add(effective)
         _candidates.value = combined.toList().take(cap)
+    }
+
+    /**
+     * Top-N word completions for the current KOR / ENG prefix.  ENG
+     * prefix-matches case-insensitively but capitalises results to match
+     * the prefix's leading-letter case so picking "He" → "Hello" not
+     * "hello" — a small but expected behaviour for English users.
+     */
+    private fun lookupWordPrefixCandidates(): List<String> {
+        // KOR mode: include the in-progress Hangul preedit ("기" while the
+        // syllable is still being built but not yet finalised) so the
+        // strip stays in lockstep with what the user is seeing in the
+        // editor — without this, suggestions only update when the NEXT
+        // syllable starts (the user's "lag by one keystroke" bug).
+        // ENG mode: composer is always empty so preedit is "".
+        val effective = currentWordPrefix + composer.preedit()
+        if (effective.isEmpty()) return emptyList()
+        return when (inputLanguage) {
+            InputLanguage.KOREAN -> korWordlist.lookup(effective, candidateCount)
+            InputLanguage.ENGLISH -> {
+                val lower = effective.lowercase()
+                val raw = enWordlist.lookup(lower, candidateCount)
+                if (effective.firstOrNull()?.isUpperCase() == true) {
+                    raw.map { it.replaceFirstChar { c -> c.uppercase() } }
+                } else raw
+            }
+            else -> emptyList()
+        }
     }
 
     /** kana run slice that the strip / pick are currently operating on. */
@@ -427,6 +510,33 @@ class KorJpnImeService :
             }
             hanjaConversionSyllable = null
             _candidates.value = emptyList()
+            return
+        }
+
+        // KOR / ENG autocomplete (Hanja didn't fire) — replace the
+        // in-progress prefix with the picked word.
+        //
+        // The prefix has TWO layers:
+        //   - currentWordPrefix in committed text (finalised syllables /
+        //     letters since the last word boundary).
+        //   - composer.preedit() in the composing region (the in-progress
+        //     Hangul syllable, e.g. "기" while building 기 → 기다 → ...).
+        // deleteSurroundingText drops only the committed half; commitText
+        // then replaces the composing region with the picked word in the
+        // same atomic batch.  Both layers cleared after.
+        if (inputLanguage != InputLanguage.JAPANESE) {
+            val committedPrefix = currentWordPrefix
+            val preedit = composer.preedit()
+            if (committedPrefix.isEmpty() && preedit.isEmpty()) return
+            composer.reset()
+            batched(ic) {
+                if (committedPrefix.isNotEmpty()) {
+                    ic.deleteSurroundingText(committedPrefix.length, 0)
+                }
+                ic.commitText(picked, 1)
+            }
+            currentWordPrefix = ""
+            refreshCandidates()
             return
         }
 
@@ -515,6 +625,7 @@ class KorJpnImeService :
             if (currentKanaRun.isNotEmpty()) ic.finishComposingText()
         }
         currentKanaRun = ""
+        currentWordPrefix = ""
         refreshCandidates()
         val next = when (inputLanguage) {
             InputLanguage.KOREAN -> InputLanguage.ENGLISH
@@ -569,6 +680,7 @@ class KorJpnImeService :
         cheonjiin.reset()
         currentKanaRun = ""
         conversionBoundary = -1
+        currentWordPrefix = ""
         refreshCandidates()
     }
 
@@ -583,8 +695,20 @@ class KorJpnImeService :
         super.onUpdateSelection(
             oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd,
         )
-        // Nothing to track — neither a Hangul preedit nor a JP-mode kana
-        // run is in flight, so any selection change is just plain editing.
+        // Nothing to track — no preedit, no JP-mode kana run, no
+        // KOR/ENG autocomplete prefix — so any selection change is just
+        // plain editing the user is doing on existing text.
+        if (composer.empty() && currentKanaRun.isEmpty() && currentWordPrefix.isEmpty()) return
+
+        // KOR / ENG-only state: there's a word-prefix in flight but no
+        // composing region (the prefix lives in committed text, which IS
+        // surrounding text from Android's POV).  Selection-change events
+        // here are usually our OWN commitText callbacks moving the caret
+        // forward; resetting on every cs<0 here would clear the prefix
+        // 0.1 s after typing each letter (the bug the user hit — strip
+        // showed suggestions then immediately wiped them).  Trust the
+        // typing path (updateWordPrefix on space / punct / mode switch)
+        // to reset the prefix instead.
         if (composer.empty() && currentKanaRun.isEmpty()) return
 
         // Case 1: composing region is gone entirely (external clear).
@@ -845,6 +969,7 @@ class KorJpnImeService :
             // Composing region = accumulated kana run + in-progress Hangul
             // preedit (same shape as handleCommit's jamo branch).
             ic.setComposingText(composingSpannable(), 1)
+            refreshCandidates()
         }
     }
 
@@ -922,6 +1047,11 @@ class KorJpnImeService :
                 // the user can see "what's been emitted as kana so far"
                 // alongside "the syllable I'm building right now".
                 ic.setComposingText(composingSpannable(), 1)
+                // Refresh candidates even when the syllable didn't migrate
+                // — KOR-mode autocomplete picks up the in-progress preedit
+                // for prefix matching, so the strip needs to update on
+                // every jamo, not just on close-syllable boundaries.
+                refreshCandidates()
             } else {
                 // Punctuation, digits, kana, anything non-jamo — flush
                 // in-progress syllable first so it commits BEFORE the new text.
@@ -1042,6 +1172,7 @@ class KorJpnImeService :
             if (currentKanaRun.isNotEmpty()) ic.finishComposingText()
         }
         currentKanaRun = ""
+        currentWordPrefix = ""
         refreshCandidates()
     }
 
@@ -1074,6 +1205,7 @@ class KorJpnImeService :
                     // empty) preedit.  Empty composing region clears the
                     // underline; non-empty replaces it.
                     ic.setComposingText(composingSpannable(), 1)
+                    refreshCandidates()
                 }
                 currentKanaRun.isNotEmpty() -> {
                     // No jamo in flight; pull the last char off the kana
@@ -1089,7 +1221,15 @@ class KorJpnImeService :
                     else ic.setComposingText(composingSpannable(), 1)
                     refreshCandidates()
                 }
-                else -> ic.deleteSurroundingText(1, 0)
+                else -> {
+                    ic.deleteSurroundingText(1, 0)
+                    // KOR / ENG autocomplete: shrink the prefix in lockstep
+                    // with the editor so suggestions update on backspace.
+                    if (currentWordPrefix.isNotEmpty()) {
+                        currentWordPrefix = currentWordPrefix.dropLast(1)
+                        refreshCandidates()
+                    }
+                }
             }
         }
     }
