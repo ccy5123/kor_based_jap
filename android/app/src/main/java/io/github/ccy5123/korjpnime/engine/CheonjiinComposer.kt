@@ -80,6 +80,22 @@ class CheonjiinComposer {
     fun isInPunctCycle(): Boolean = buffer is Buffer.Punct
 
     /**
+     * Preview text for in-progress ㆍ strokes that haven't yet resolved into
+     * a concrete vowel.  ㆍ alone is intermediate (no Op.Emit fires until the
+     * next stroke disambiguates), so without a preview the user types
+     * ㄴ + ㆍ + ㆍ + ㅡ and the editor goes "ㄴ → ㄴ → ㄴ → 뇨" — the two dot
+     * taps register invisibly and the user can't tell which step they're on.
+     * Returning "ㆍ" / "ᆢ" here lets [composingSpannable] append them to the
+     * preedit so the visible progression is "ㄴ → ㄴㆍ → ㄴᆢ → 뇨".  Returns
+     * "" for buffers that don't need a preview (the emit already landed).
+     */
+    fun dotPreview(): String = when (buffer) {
+        Buffer.Vowel.DotIntermediate -> "ㆍ"  // ㆍ
+        Buffer.Vowel.DoubleDotIntermediate -> "ᆢ"  // ᆢ (HANGUL JUNGSEONG SSANGARAEA)
+        else -> ""
+    }
+
+    /**
      * Process a consonant key tap.  Each Cheonjiin consonant key has a fixed
      * cycle (e.g., `[ㄱ, ㅋ, ㄲ]`).  Returns the ops the host should apply.
      */

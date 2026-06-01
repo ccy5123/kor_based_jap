@@ -606,7 +606,13 @@ class KorJpnImeService :
      * enough on its own.
      */
     private fun composingSpannable(): CharSequence {
-        val full = currentKanaRun + composer.preedit()
+        // Suffix the in-progress ㆍ stroke preview (ㆍ / ᆢ) so the user sees
+        // their dot taps land — without this, ㄴ + ㆍ + ㆍ + ㅡ visually
+        // goes "ㄴ → ㄴ → ㄴ → 뇨" with two silent dot steps.  See
+        // [CheonjiinComposer.dotPreview].  The dot preview sits AFTER the
+        // composer preedit because that's the user's left-to-right typing
+        // order (cho first, then nucleus).
+        val full = currentKanaRun + composer.preedit() + cheonjiin.dotPreview()
         if (full.isEmpty()) return ""
         if (conversionBoundary < 0 || currentKanaRun.isEmpty()) return full
         val spannable = SpannableString(full)
@@ -1231,7 +1237,10 @@ class KorJpnImeService :
      * (same reasoning as [handleCommit]).
      */
     private fun handleCjOps(ic: InputConnection, ops: List<CheonjiinComposer.Op>) {
-        if (ops.isEmpty()) return
+        // NOTE: do NOT early-return on empty ops — a ㆍ tap that lands the
+        // buffer in DotIntermediate / DoubleDotIntermediate emits no Op but
+        // still needs setComposingText below to surface the new dot preview
+        // (see [CheonjiinComposer.dotPreview] / [composingSpannable]).
         batched(ic) {
             for (op in ops) {
                 when (op) {
@@ -1299,11 +1308,15 @@ class KorJpnImeService :
      * its own.
      */
     private fun resyncComposerIfStale(ic: InputConnection) {
-        if (composer.empty() && currentKanaRun.isEmpty()) return
+        if (composer.empty() && currentKanaRun.isEmpty() && cheonjiin.dotPreview().isEmpty()) return
         // The composing region currently holds [accumulated kana run] +
-        // [in-progress Hangul preedit]; getTextBeforeCursor includes the
-        // composing region's contents, so the comparison is end-to-end.
-        val expected = currentKanaRun + composer.preedit()
+        // [in-progress Hangul preedit] + [Cheonjiin ㆍ-stroke preview];
+        // getTextBeforeCursor includes the composing region's contents,
+        // so the comparison is end-to-end.  Forgetting the dot preview
+        // here misfires the resync on every second ㆍ tap (the preview
+        // appended by the prior tap is in the editor but NOT in
+        // composer.preedit, so actual ≠ expected → spurious reset).
+        val expected = currentKanaRun + composer.preedit() + cheonjiin.dotPreview()
         if (expected.isEmpty()) return
         val actual = ic.getTextBeforeCursor(expected.length, 0)?.toString() ?: return
         if (actual != expected) {
