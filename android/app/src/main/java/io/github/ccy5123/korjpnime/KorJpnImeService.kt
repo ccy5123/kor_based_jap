@@ -93,6 +93,38 @@ class KorJpnImeService :
     private val cheonjiin = CheonjiinComposer()
 
     /**
+     * Single-step rollback state for a Cheonjiin consonant cycle whose first
+     * tap broke the previous syllable (typically because the cycle's first
+     * char doesn't form a compound jong but a later position does — ㄶ / ㅀ
+     * via the ㅅ-key cycle [ㅅ, ㅎ, ㅆ]).
+     *
+     * Set inside [handleCjOps] when an [CheonjiinComposer.Op.Emit] finalised
+     * a syllable to the editor.  Consumed (and cleared) by the very next
+     * [CheonjiinComposer.Op.Undo] — the cycle advance.  Cleared by any
+     * non-Cj action that calls [cheonjiin.reset] (centralised via
+     * [resetCheonjiin]), and by every fresh [CheonjiinComposer.Op.Emit] in
+     * [handleCjOps] (a new emit invalidates the prior rollback target).
+     *
+     * Why a snapshot-and-rollback instead of "delay the first emit": showing
+     * the user the broken state (안 + ㅅ → "안ㅅ" briefly) gives them visual
+     * feedback that the cycle is active; deferring the emit would leave the
+     * keyboard feeling unresponsive.
+     */
+    private data class CjCycleRollback(
+        val composerSnapshot: HangulComposer.Snapshot,
+        val editorTextLen: Int,
+    )
+    private var pendingCjRollback: CjCycleRollback? = null
+
+    /** Call instead of [cheonjiin.reset] directly so the rollback state stays
+     *  in sync — clearing one without the other could leave a stale snapshot
+     *  whose composer state doesn't match what's actually on screen. */
+    private fun resetCheonjiin() {
+        cheonjiin.reset()
+        pendingCjRollback = null
+    }
+
+    /**
      * Latest haptics setting cached from [KeyboardPreferences.hapticsFlow].
      * @Volatile because it's read on the IME UI thread (handleAction) and
      * written from the lifecycleScope coroutine.
@@ -206,6 +238,17 @@ class KorJpnImeService :
     val clipboardItems: StateFlow<List<String>> = _clipboardItems.asStateFlow()
 
     /**
+     * Most recently copied clipboard text, surfaced as a tap-to-paste chip
+     * in the candidate strip.  Set by the [clipChangedListener] when an
+     * external copy fires; cleared once the user either picks the chip OR
+     * commits any text via [emit] (so it doesn't linger past the point
+     * the user clearly moved on).  Null when there's nothing fresh to
+     * surface — opening the ⋯ → 📋 panel is still available for history.
+     */
+    private val _clipboardChip = MutableStateFlow<String?>(null)
+    val clipboardChip: StateFlow<String?> = _clipboardChip.asStateFlow()
+
+    /**
      * Bundled Unicode emoji data + per-user history of recently picked
      * emojis.  Surfaced by the ⋯ menu's 이모지 entry as a tab-and-grid
      * panel above the keyboard.
@@ -223,6 +266,7 @@ class KorJpnImeService :
         if (text.isNotEmpty()) {
             clipboardHistory.add(text)
             _clipboardItems.value = clipboardHistory.items
+            _clipboardChip.value = text
         }
     }
 
@@ -325,6 +369,7 @@ class KorJpnImeService :
                 .collectAsState(initial = InputLanguage.JAPANESE)
             val candidateList by candidates.collectAsState()
             val clipboardList by clipboardItems.collectAsState()
+            val clipboardChipText by clipboardChip.collectAsState()
             val emojiRecentList by emojiRecents.collectAsState()
 
             val direction = DIRECTIONS.firstOrNull { it.id == directionId } ?: DIRECTIONS.first()
@@ -351,6 +396,8 @@ class KorJpnImeService :
                         onSystemImeSettings = ::openSystemImeSettings,
                         onVoiceInput = ::openVoiceInput,
                         clipboardItems = clipboardList,
+                        clipboardChip = clipboardChipText,
+                        onClipboardChipPick = ::handleClipboardChipPick,
                         onClipboardPick = ::handleClipboardPick,
                         onClipboardDelete = { item ->
                             clipboardHistory.remove(item)
@@ -391,6 +438,9 @@ class KorJpnImeService :
      */
     private fun emit(ic: InputConnection, text: String) {
         if (text.isEmpty()) return
+        // Dismiss the auto-clipboard chip on any committed text — the user
+        // clearly moved on from the "I just copied something" moment.
+        _clipboardChip.value = null
         if (isAllHiragana(text)) {
             currentKanaRun += text
             // New kana invalidates any prior boundary the user set via
@@ -823,7 +873,7 @@ class KorJpnImeService :
     /** Drop composer / Cheonjiin / kana-run state and clear candidates. */
     private fun resetAllState() {
         composer.reset()
-        cheonjiin.reset()
+        resetCheonjiin()
         currentKanaRun = ""
         conversionBoundary = -1
         currentWordPrefix = ""
@@ -910,6 +960,21 @@ class KorJpnImeService :
     }
 
     /**
+     * Tap-to-paste handler for the candidate-strip clipboard chip
+     * (auto-surfaced by [clipChangedListener] whenever an external copy
+     * fires).  Commits the chip text at the cursor and dismisses the
+     * chip — independent of the broader history panel, which stays
+     * reachable via the ⋯ menu for older items.
+     */
+    fun handleClipboardChipPick() {
+        val text = _clipboardChip.value ?: return
+        _clipboardChip.value = null
+        val ic = currentInputConnection ?: return
+        finalizeForCursor(ic)
+        batched(ic) { ic.commitText(text, 1) }
+    }
+
+    /**
      * Commit the picked emoji at the current cursor and push it to the
      * recents history.  Doesn't dismiss the panel — the user often wants
      * to chain multiple emojis (e.g. 🎉🎂🥳); the panel's ✕ button is
@@ -941,7 +1006,7 @@ class KorJpnImeService :
             action is KeyAction.CjVowel ||
             action is KeyAction.CjPunct
         if (!isCjTap && action != KeyAction.Space) {
-            cheonjiin.reset()
+            resetCheonjiin()
         }
         // Hanja conversion priming is per-tap: any action other than tapping
         // Hanja itself (or picking a candidate, which clears the priming
@@ -1037,11 +1102,20 @@ class KorJpnImeService :
      *  expected two-tap behaviour.
      */
     private fun handleSpace(ic: InputConnection) {
-        cheonjiin.reset()
+        // Punct-cycle break: when the user is mid-punct-cycle (just tapped
+        // a punct key and the editor shows that single char), Space should
+        // ONLY break the cycle — no literal space — so a second punct tap
+        // commits afresh rather than overwriting in place.  Lets the user
+        // type ". . ." → "..." like ㅋ + space + ㅋ + space + ㅋ → "ㅋㅋㅋ"
+        // (the user's exact analogy).  Tapping Space again with the punct
+        // cycle already broken hits the regular literal-space branch below.
+        val wasInPunctCycle = cheonjiin.isInPunctCycle()
+        resetCheonjiin()
         if (!composer.empty()) {
             batched(ic) { flushComposerInner(ic) }
             return
         }
+        if (wasInPunctCycle) return
         batched(ic) { emit(ic, " ") }
     }
 
@@ -1087,7 +1161,7 @@ class KorJpnImeService :
             // Existing silent-ㅇ + 오/와/에 + ㆍ → を / は / へ particle markers.
             val triggerJamo = particleMarkerTrigger()
             if (triggerJamo != null) {
-                cheonjiin.reset()
+                resetCheonjiin()
                 handleCjOps(ic, listOf(CheonjiinComposer.Op.Emit(triggerJamo)))
                 return
             }
@@ -1097,7 +1171,7 @@ class KorJpnImeService :
             // in Japanese.  Silent ㅇ + ㅗ + ㆍ stays as the を particle
             // path above per the user's "を 입력방식 그대로 유지" call.
             if (longOuShortcutTriggers()) {
-                cheonjiin.reset()
+                resetCheonjiin()
                 batched(ic) {
                     flushComposerInner(ic)
                     emit(ic, "う")
@@ -1161,10 +1235,38 @@ class KorJpnImeService :
         batched(ic) {
             for (op in ops) {
                 when (op) {
-                    CheonjiinComposer.Op.Undo -> composer.undoLastJamo()
-                    is CheonjiinComposer.Op.Emit -> composer.input(op.jamo).also { finalized ->
+                    CheonjiinComposer.Op.Undo -> {
+                        // Cycle advance: if the previous Op.Emit committed a
+                        // syllable to the editor (e.g. ㅅ after 안 → "안" +
+                        // cho=ㅅ because ('ㄴ','ㅅ') isn't a compound jong),
+                        // we need to ALSO un-commit that syllable so the
+                        // next Emit (ㅎ) can reattach as ㄶ.  Without this,
+                        // undoLastJamo would only peel cho=ㅅ → cho=ㅎ and
+                        // leave the orphan "안" stuck in the editor.
+                        val rb = pendingCjRollback
+                        if (rb != null) {
+                            ic.deleteSurroundingText(rb.editorTextLen, 0)
+                            onCharsDeleted(rb.editorTextLen)
+                            composer.restoreSnapshot(rb.composerSnapshot)
+                            pendingCjRollback = null
+                        } else {
+                            composer.undoLastJamo()
+                        }
+                    }
+                    is CheonjiinComposer.Op.Emit -> {
+                        // Capture pre-input state BEFORE input() so a follow-up
+                        // Op.Undo can revert this emit's effects in full —
+                        // including any syllable commit that input() returned.
+                        val pre = composer.snapshot()
+                        val finalized = composer.input(op.jamo)
                         if (finalized.isNotEmpty()) {
-                            emit(ic, convertForOutput(finalized, composer.currentChoJamo()))
+                            val out = convertForOutput(finalized, composer.currentChoJamo())
+                            emit(ic, out)
+                            pendingCjRollback = CjCycleRollback(pre, out.length)
+                        } else {
+                            // Emit absorbed into composer (no commit) —
+                            // any prior rollback target is now stale.
+                            pendingCjRollback = null
                         }
                     }
                 }

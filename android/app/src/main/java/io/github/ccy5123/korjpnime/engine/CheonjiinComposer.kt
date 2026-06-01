@@ -74,6 +74,11 @@ class CheonjiinComposer {
      */
     fun isInConsonantCycle(): Boolean = buffer is Buffer.Consonant
 
+    /** True when we're inside an active punct cycle (used by the IME service
+     *  to suppress the literal space that would otherwise follow a punct
+     *  tap, so '.' + Space + '.' produces ".." instead of ". ."). */
+    fun isInPunctCycle(): Boolean = buffer is Buffer.Punct
+
     /**
      * Process a consonant key tap.  Each Cheonjiin consonant key has a fixed
      * cycle (e.g., `[ㄱ, ㅋ, ㄲ]`).  Returns the ops the host should apply.
@@ -290,8 +295,21 @@ class CheonjiinComposer {
     }
 
     companion object {
-        /** Cycle window: same key within this many ms continues the cycle. */
-        const val WINDOW_MS: Long = 1500L
+        /**
+         * Cycle window: same key within this many ms continues the cycle.
+         * Bumped from the original 1500 ms to 3000 ms after the user
+         * reported only ㅄ working among compound jongs after a month of
+         * use.  Reason: compound jongs like ㅀ (=ㄹ+ㅎ) and ㄶ (=ㄴ+ㅎ)
+         * need TWO cycle taps on the second key (ㅅ key 1 → ㅅ → forms a
+         * single-step compound; ㅅ key 2 → cycle to ㅎ → split + reform as
+         * the actual desired compound).  If the user's typing rhythm is
+         * slower than ~1.5 s the cycle expired and the second tap was
+         * treated as a fresh ㅅ — losing the ㅎ entirely.  3 s headroom
+         * covers careful typists without affecting "I changed my mind"
+         * fresh-key cases (those almost always sit behind an intervening
+         * vowel / mode switch that flips the buffer away from Consonant).
+         */
+        const val WINDOW_MS: Long = 3000L
 
         // Vowel stroke keys
         const val STROKE_I: Char = 'ㅣ'

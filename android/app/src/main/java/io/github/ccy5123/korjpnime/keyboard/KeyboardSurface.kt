@@ -46,6 +46,8 @@ fun KeyboardSurface(
     onSystemImeSettings: (() -> Unit)? = null,
     onVoiceInput: (() -> Unit)? = null,
     clipboardItems: List<String> = emptyList(),
+    clipboardChip: String? = null,
+    onClipboardChipPick: () -> Unit = {},
     onClipboardPick: (String) -> Unit = {},
     onClipboardDelete: (String) -> Unit = {},
     emojiCategories: List<io.github.ccy5123.korjpnime.engine.EmojiData.Category> = emptyList(),
@@ -84,6 +86,8 @@ fun KeyboardSurface(
             onClipboardClick = { showClipboard = true },
             onEmojiClick = { showEmoji = true },
             onVoiceClick = onVoiceInput,
+            clipboardChip = clipboardChip,
+            onClipboardChipPick = onClipboardChipPick,
         )
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             // ENGLISH mode always renders QWERTY regardless of the user's

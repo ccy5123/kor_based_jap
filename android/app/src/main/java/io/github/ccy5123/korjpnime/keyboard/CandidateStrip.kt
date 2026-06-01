@@ -51,6 +51,8 @@ fun CandidateStrip(
     onClipboardClick: (() -> Unit)? = null,
     onEmojiClick: (() -> Unit)? = null,
     onVoiceClick: (() -> Unit)? = null,
+    clipboardChip: String? = null,
+    onClipboardChipPick: () -> Unit = {},
 ) {
     val baseModifier = Modifier
         .fillMaxWidth()
@@ -76,16 +78,23 @@ fun CandidateStrip(
         Box(modifier = Modifier.padding(start = 10.dp, end = 8.dp)) {
             LanguageBadge(tokens = tokens, inputLanguage = inputLanguage)
         }
-        // Middle: scrollable candidates.
+        // Middle: scrollable candidates.  An auto-clipboard chip (if any)
+        // sits at the LEFT of the candidates so the user notices a fresh
+        // external copy without losing access to in-progress kanji /
+        // autocomplete picks.
         Row(
             modifier = Modifier
                 .weight(1f)
                 .horizontalScroll(rememberScrollState())
                 .padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = if (treatment == StripTreatment.CHIP)
-                Arrangement.spacedBy(6.dp) else Arrangement.Start,
+            horizontalArrangement = Arrangement.spacedBy(
+                if (treatment == StripTreatment.CHIP) 6.dp else 4.dp,
+            ),
         ) {
+            if (clipboardChip != null) {
+                ClipboardChip(clipboardChip, tokens, onClick = onClipboardChipPick)
+            }
             candidates.forEachIndexed { i, c ->
                 val selected = i == 0
                 val pickModifier = Modifier.clickable { onPick(c) }
@@ -232,6 +241,43 @@ private fun FlushCandidate(
                 .size(4.dp)
                 .clip(CircleShape)
                 .background(if (selected) tokens.accent else Color.Transparent),
+        )
+    }
+}
+
+/**
+ * Auto-surfaced clipboard chip — appears at the left of the candidate
+ * row when an external copy lands while the keyboard is alive.  Tap to
+ * paste; dismissed on first committed keystroke or on tap.  Truncated
+ * to one line + ellipsis so long clipboard text doesn't crowd out the
+ * real candidates.
+ */
+@Composable
+private fun ClipboardChip(
+    text: String,
+    tokens: KeyboardTokens,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(tokens.accentSoft)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = "📋",
+            fontSize = 11.sp,
+        )
+        Text(
+            text = text.take(40),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = tokens.accent,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
         )
     }
 }
