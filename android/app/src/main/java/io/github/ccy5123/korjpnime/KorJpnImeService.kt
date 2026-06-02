@@ -614,9 +614,7 @@ class KorJpnImeService :
         // Suffix the in-progress ㆍ stroke preview (ㆍ / ᆢ) so the user sees
         // their dot taps land — without this, ㄴ + ㆍ + ㆍ + ㅡ visually
         // goes "ㄴ → ㄴ → ㄴ → 뇨" with two silent dot steps.  See
-        // [CheonjiinComposer.dotPreview].  The dot preview sits AFTER the
-        // composer preedit because that's the user's left-to-right typing
-        // order (cho first, then nucleus).
+        // [CheonjiinComposer.dotPreview].
         val full = currentKanaRun + composer.preedit() + cheonjiin.dotPreview()
         if (full.isEmpty()) return ""
         if (conversionBoundary < 0 || currentKanaRun.isEmpty()) return full
@@ -1247,53 +1245,46 @@ class KorJpnImeService :
         // still needs setComposingText below to surface the new dot preview
         // (see [CheonjiinComposer.dotPreview] / [composingSpannable]).
         batched(ic) {
-            for (op in ops) {
+            ops.forEachIndexed { i, op ->
                 when (op) {
                     CheonjiinComposer.Op.Undo -> {
-                        // Consonant-cycle advance with a pending rollback:
-                        // the previous Op.Emit committed a syllable because
-                        // the cycle's first char didn't form a compound jong
-                        // (안 + ㅅ → "안" + cho=ㅅ; cycle to ㅎ wants to undo
-                        // that commit so ㅎ can reattach as ㄶ → 않).
-                        // deleteSurroundingText is documented to ignore the
-                        // composing region, so the rb.editorTextLen chars
-                        // immediately before the composing region are what
-                        // get deleted.  composer.restoreSnapshot then puts
-                        // the syllable state back to pre-commit so the next
-                        // Op.Emit can build the compound.
+                        // Rollback the previous emit's syllable commit ONLY
+                        // when the next emit would form a compound jong
+                        // with the pre-commit state's jong — i.e. the
+                        // user is actually cycling INTO a compound (안+ㅅ→
+                        // ㅎ → 않 via ㄶ).  In every other case (non-
+                        // compound consonant cycle like 박+ㅈ→ㅊ, or any
+                        // vowel cycle) plain undoLastJamo on the CURRENT
+                        // composer state is correct and avoids the
+                        // editor-level delete + re-commit cursor flicker.
                         val rb = pendingCjRollback
-                        if (rb != null) {
+                        val nextJamo = (ops.getOrNull(i + 1)
+                            as? CheonjiinComposer.Op.Emit)?.jamo
+                        if (rb != null && nextJamo != null &&
+                            rb.composerSnapshot.wouldFormCompoundJongWith(nextJamo)
+                        ) {
                             ic.deleteSurroundingText(rb.editorTextLen, 0)
                             onCharsDeleted(rb.editorTextLen)
                             composer.restoreSnapshot(rb.composerSnapshot)
-                            pendingCjRollback = null
                         } else {
                             composer.undoLastJamo()
                         }
+                        pendingCjRollback = null
                     }
                     is CheonjiinComposer.Op.Emit -> {
-                        // Capture pre-input state BEFORE input() so a follow-up
-                        // consonant-cycle Op.Undo can revert this emit's effects
-                        // in full — including any syllable commit that input()
-                        // returned (compound-jong case: ㅅ on 안 → "안" + cho=ㅅ).
+                        // Capture pre-input state BEFORE input() so the
+                        // follow-up cycle-advance Op.Undo can peek (above)
+                        // whether the next emit would compound-jong, and
+                        // restore here if so.
                         val pre = composer.snapshot()
                         val finalized = composer.input(op.jamo)
                         if (finalized.isNotEmpty()) {
                             val out = convertForOutput(finalized, composer.currentChoJamo())
                             emit(ic, out)
-                            // Set the rollback target ONLY for consonant emits.
-                            // Vowel emits that commit (CHO_JUNG_JONG + vowel →
-                            // syllable migration: 햊 + ㅡ → "해" committed +
-                            // cho=ㅈ,jung=ㅡ) don't need rollback — the
-                            // subsequent vowel-cycle Op.Undo (ㅡ→ㅜ via ㆍ)
-                            // is a "peel current jung" operation served by
-                            // plain undoLastJamo, and triggering the full
-                            // editor-rollback path there would cause a
-                            // visible delete + re-commit flicker for no
-                            // functional benefit.  Compound jong (consonant
-                            // path) still needs the rollback because the
-                            // next emit forms a compound (안+ㅅ→ㅎ → 않),
-                            // not a peel.
+                            // Only stash a rollback target for consonant
+                            // emits: vowel emits' Op.Undo is always the
+                            // "peel current jung" path which undoLastJamo
+                            // handles cleanly.
                             pendingCjRollback = if (isConsonantJamo(op.jamo)) {
                                 CjCycleRollback(pre, out.length)
                             } else null
@@ -1306,7 +1297,8 @@ class KorJpnImeService :
                 }
             }
             // Composing region = accumulated kana run + in-progress Hangul
-            // preedit (same shape as handleCommit's jamo branch).
+            // preedit + ㆍ-stroke preview (same shape as handleCommit's
+            // jamo branch).
             ic.setComposingText(composingSpannable(), 1)
             refreshCandidates()
         }
@@ -1337,10 +1329,7 @@ class KorJpnImeService :
         // The composing region currently holds [accumulated kana run] +
         // [in-progress Hangul preedit] + [Cheonjiin ㆍ-stroke preview];
         // getTextBeforeCursor includes the composing region's contents,
-        // so the comparison is end-to-end.  Forgetting the dot preview
-        // here misfires the resync on every second ㆍ tap (the preview
-        // appended by the prior tap is in the editor but NOT in
-        // composer.preedit, so actual ≠ expected → spurious reset).
+        // so the comparison is end-to-end.
         val expected = currentKanaRun + composer.preedit() + cheonjiin.dotPreview()
         if (expected.isEmpty()) return
         val actual = ic.getTextBeforeCursor(expected.length, 0)?.toString() ?: return
