@@ -124,6 +124,11 @@ class KorJpnImeService :
         pendingCjRollback = null
     }
 
+    /** True for Hangul compatibility-jamo consonants (U+3131..U+314E).
+     *  Used in [handleCjOps] to scope the rollback snapshot to consonant
+     *  emits only — vowel emits don't need editor-level rollback. */
+    private fun isConsonantJamo(c: Char): Boolean = c.code in 0x3131..0x314E
+
     /**
      * Latest haptics setting cached from [KeyboardPreferences.hapticsFlow].
      * @Volatile because it's read on the IME UI thread (handleAction) and
@@ -1245,13 +1250,17 @@ class KorJpnImeService :
             for (op in ops) {
                 when (op) {
                     CheonjiinComposer.Op.Undo -> {
-                        // Cycle advance: if the previous Op.Emit committed a
-                        // syllable to the editor (e.g. ㅅ after 안 → "안" +
-                        // cho=ㅅ because ('ㄴ','ㅅ') isn't a compound jong),
-                        // we need to ALSO un-commit that syllable so the
-                        // next Emit (ㅎ) can reattach as ㄶ.  Without this,
-                        // undoLastJamo would only peel cho=ㅅ → cho=ㅎ and
-                        // leave the orphan "안" stuck in the editor.
+                        // Consonant-cycle advance with a pending rollback:
+                        // the previous Op.Emit committed a syllable because
+                        // the cycle's first char didn't form a compound jong
+                        // (안 + ㅅ → "안" + cho=ㅅ; cycle to ㅎ wants to undo
+                        // that commit so ㅎ can reattach as ㄶ → 않).
+                        // deleteSurroundingText is documented to ignore the
+                        // composing region, so the rb.editorTextLen chars
+                        // immediately before the composing region are what
+                        // get deleted.  composer.restoreSnapshot then puts
+                        // the syllable state back to pre-commit so the next
+                        // Op.Emit can build the compound.
                         val rb = pendingCjRollback
                         if (rb != null) {
                             ic.deleteSurroundingText(rb.editorTextLen, 0)
@@ -1264,14 +1273,30 @@ class KorJpnImeService :
                     }
                     is CheonjiinComposer.Op.Emit -> {
                         // Capture pre-input state BEFORE input() so a follow-up
-                        // Op.Undo can revert this emit's effects in full —
-                        // including any syllable commit that input() returned.
+                        // consonant-cycle Op.Undo can revert this emit's effects
+                        // in full — including any syllable commit that input()
+                        // returned (compound-jong case: ㅅ on 안 → "안" + cho=ㅅ).
                         val pre = composer.snapshot()
                         val finalized = composer.input(op.jamo)
                         if (finalized.isNotEmpty()) {
                             val out = convertForOutput(finalized, composer.currentChoJamo())
                             emit(ic, out)
-                            pendingCjRollback = CjCycleRollback(pre, out.length)
+                            // Set the rollback target ONLY for consonant emits.
+                            // Vowel emits that commit (CHO_JUNG_JONG + vowel →
+                            // syllable migration: 햊 + ㅡ → "해" committed +
+                            // cho=ㅈ,jung=ㅡ) don't need rollback — the
+                            // subsequent vowel-cycle Op.Undo (ㅡ→ㅜ via ㆍ)
+                            // is a "peel current jung" operation served by
+                            // plain undoLastJamo, and triggering the full
+                            // editor-rollback path there would cause a
+                            // visible delete + re-commit flicker for no
+                            // functional benefit.  Compound jong (consonant
+                            // path) still needs the rollback because the
+                            // next emit forms a compound (안+ㅅ→ㅎ → 않),
+                            // not a peel.
+                            pendingCjRollback = if (isConsonantJamo(op.jamo)) {
+                                CjCycleRollback(pre, out.length)
+                            } else null
                         } else {
                             // Emit absorbed into composer (no commit) —
                             // any prior rollback target is now stale.
